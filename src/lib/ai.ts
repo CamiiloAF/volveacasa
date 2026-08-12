@@ -20,15 +20,28 @@ import {
 } from './types';
 
 /**
- * Gemini Flash: tiene capa gratuita para arrancar y es el tramo más barato
- * cuando toque pagar. Para "mirá esta foto y decime de qué color es el perro"
- * no hace falta un modelo de frontera, y esta app tiene que poder sostenerse
- * sin ingresos.
+ * Flash-Lite y no Flash, medido contra la API real:
  *
- * El modelo es configurable por si sale uno mejor o más barato: no hay que
- * tocar código para cambiarlo.
+ * - `gemini-3.6-flash` agota su cuota gratuita a las 20 peticiones. Sirve para
+ *   probar, no para tener la app abierta al público sin facturación activa.
+ * - `gemini-3.5-flash-lite` tiene cuota gratuita usable, es el tramo más barato
+ *   al escalar, y describiendo la foto de una mascota se comporta casi igual:
+ *   saca los colores, el tamaño y las señas particulares.
+ *
+ * Para "mirá esta foto y decime cómo es este gato" no hace falta un modelo de
+ * frontera, y esta app tiene que poder sostenerse sin ingresos.
+ *
+ * Con facturación activa, `gemini-3.6-flash` da algo más de detalle: se cambia
+ * por GEMINI_MODEL, sin tocar código.
  */
-const MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.6-flash';
+const MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.5-flash-lite';
+
+/**
+ * Un 429 no se arregla reintentando: la cuota sigue agotada, y cada reintento
+ * consume otra petición y retrasa la respuesta. Preferimos fallar rápido y
+ * dejar que el llamador use su plan B.
+ */
+const REQUEST_OPTIONS = { maxRetries: 1 } as const;
 
 let cached: GoogleGenAI | null = null;
 
@@ -214,8 +227,14 @@ export async function extractAttributes(input: {
       mime_type: 'application/json',
       schema: attributesSchema,
     },
-    generation_config: { max_output_tokens: 2000 },
-  });
+    generation_config: {
+      // OJO: max_output_tokens incluye los tokens de razonamiento. Con el
+      // presupuesto justo, el modelo piensa hasta agotarlo y devuelve el JSON
+      // cortado a la mitad. Dejamos aire de sobra y limitamos el razonamiento.
+      max_output_tokens: 8000,
+      thinking_level: 'low',
+    },
+  }, REQUEST_OPTIONS);
 
   const raw = attributesParser.parse(parseJson(interaction.output_text, 'analizar las fotos'));
 
@@ -245,6 +264,7 @@ const SEARCH_SYSTEM = `Sos el buscador de Volvé a Casa, una plataforma colombia
 
 Reglas:
 - Usá "cualquiera" en todo filtro que la persona no haya dicho explícitamente. Filtrar de más esconde justo al animal que están buscando.
+- No deduzcas nada que no esté dicho. Un diminutivo como "gatico", "perrito" o "michi" NO indica tamaño. El género gramatical de una palabra NO indica el sexo del animal: "perrita" puede ser como la llama quien la busca, no un dato. Ante la duda, "cualquiera".
 - "kind": "perdido" si buscan un animal que se perdió, "encontrado" si buscan entre los que alguien recogió. Frases como "vi un perro en la calle" o "me encontré un gato" describen un hallazgo, así que quien las escribe suele estar buscando al dueño: eso es "perdido". "se me perdió mi gata" también es "perdido". Si no queda claro, "cualquiera".
 - "colors": solo los colores que la persona nombró. "café", "marrón" y "chocolate" son tonos distintos: escogé el más cercano. "amarillo" y "beige" suelen ser "dorado" o "crema".
 - "city_query": el nombre del municipio o barrio tal como lo escribieron, sin el departamento. Vacío si no mencionaron lugar.
@@ -262,8 +282,14 @@ export async function parseSearchQuery(query: string): Promise<SearchIntent> {
       mime_type: 'application/json',
       schema: intentSchema,
     },
-    generation_config: { max_output_tokens: 1000 },
-  });
+    generation_config: {
+      // Ver la nota en extractAttributes: el presupuesto lo comparten el
+      // razonamiento y la respuesta. Interpretar una búsqueda no necesita
+      // pensar mucho, y pensar de más además hace que invente filtros.
+      max_output_tokens: 4000,
+      thinking_level: 'low',
+    },
+  }, REQUEST_OPTIONS);
 
   const raw = intentParser.parse(parseJson(interaction.output_text, 'interpretar la búsqueda'));
 

@@ -198,6 +198,62 @@ export function ManagePanel({ token }: { token: string }) {
         </button>
       </div>
 
+      {/* Análisis de fotos */}
+      <div className="card p-5 flex flex-col gap-3">
+        <h2 className="font-bold">
+          {pet.ai_summary ? 'Lo que la IA vio en tus fotos' : 'Tus fotos no se analizaron'}
+        </h2>
+
+        {pet.ai_summary ? (
+          <>
+            <p className="text-ink-soft">{pet.ai_summary}</p>
+            {pet.marks.length > 0 && (
+              <ul className="flex flex-wrap gap-1.5">
+                {pet.marks.map((mark) => (
+                  <li
+                    key={mark}
+                    className="text-xs px-2.5 py-1 rounded-full bg-surface-soft text-ink-soft"
+                  >
+                    {mark}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="text-xs text-ink-soft">
+              Estas señas son las que hacen que alguien encuentre tu aviso al buscar. Si algo no
+              coincide, volvé a analizarlas.
+            </p>
+          </>
+        ) : (
+          <p className="text-ink-soft text-sm">
+            Cuando publicaste, la IA no alcanzó a mirar tus fotos. Tu aviso está publicado igual,
+            pero le faltan las señas particulares que ayudan a que la búsqueda lo encuentre.
+            Analizalas ahora — toma unos segundos.
+          </p>
+        )}
+
+        <button
+          type="button"
+          disabled={saving}
+          onClick={async () => {
+            const result = await send({ action: 'reanalizar' }, 'Listo, fotos analizadas.');
+            if (result) {
+              setState({
+                phase: 'ready',
+                pet: { ...pet, ai_summary: result.summary, marks: result.marks ?? [] },
+              });
+            }
+          }}
+          className={`px-5 py-2.5 rounded-xl font-bold self-start ${
+            pet.ai_summary
+              ? 'border border-border bg-surface'
+              : 'bg-primary text-primary-ink'
+          }`}
+        >
+          {saving ? 'Analizando…' : pet.ai_summary ? 'Volver a analizar' : '✨ Analizar mis fotos'}
+        </button>
+      </div>
+
       {/* Edición */}
       <form
         className="card p-5 flex flex-col gap-4"

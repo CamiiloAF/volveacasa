@@ -27,10 +27,13 @@ Gratis, sin crear cuenta, y con búsqueda en lenguaje natural: se escribe
 
 ### 2. Correr la migración
 
-En el panel de Supabase → **SQL Editor** → **New query**, pegá completo el
-contenido de [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql)
-y dale **Run**. Eso crea la tabla, los índices, las funciones de búsqueda, las
-políticas de seguridad y el bucket de fotos.
+En el panel de Supabase → **SQL Editor** → **New query**, pegá y ejecutá **las
+migraciones en orden**:
+
+1. [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql) —
+   tabla, índices, funciones de búsqueda, políticas de seguridad y bucket de fotos.
+2. [`supabase/migrations/0002_busqueda_sin_excluir.sql`](supabase/migrations/0002_busqueda_sin_excluir.sql)
+   — hace que el tamaño y el sexo puntúen en vez de excluir.
 
 ### 3. Variables de entorno
 
@@ -104,14 +107,33 @@ más y ordenar bien.
 aviso sin atributos, y la búsqueda cae a un modo por palabras sueltas que
 reconoce colores y especie. Peor que la IA, muchísimo mejor que un error.
 
-### Costo y escala
+### Costo, cuotas y escala
 
-Se arranca en la **capa gratuita** de Gemini, que alcanza de sobra para las
-primeras semanas. Cuando el volumen crezca hay dos palancas, en este orden:
+Todo esto está **medido contra la API real**, no sacado de la documentación:
 
-1. **Bajar de modelo.** `GEMINI_MODEL=gemini-3.5-flash-lite` es el tramo más
-   económico para alto volumen. Es una variable de entorno, no un cambio de
-   código.
+| Modelo | Cuota gratuita | Sirve para |
+|---|---|---|
+| `gemini-3.5-flash-lite` | usable | **el default**: producción sin facturación |
+| `gemini-3.6-flash` | se agota a las 20 peticiones | probar, o con facturación activa |
+
+Por eso el default es Flash-Lite. Describiendo la foto de una mascota se
+comporta casi igual: en la prueba con un gato bicolor sacó "manchas negras en el
+hocico tipo bigote", "mancha negra en la barbilla" y "orejas negras". Flash da
+algo más de detalle (agregó el color de los ojos) y cuesta más.
+
+Dos detalles que cuestan plata si no se saben:
+
+- **`max_output_tokens` incluye los tokens de razonamiento.** Con el presupuesto
+  justo, el modelo piensa hasta agotarlo y devuelve el JSON cortado a la mitad.
+  Por eso `thinking_level: 'low'` y presupuestos holgados: bajó el razonamiento
+  de ~890 a ~150 tokens por búsqueda **y de paso dejó de inventar filtros**.
+- **Un 429 no se arregla reintentando.** El SDK reintenta por defecto y cada
+  reintento consume otra petición de la cuota. Va con `maxRetries: 1`.
+
+Cuando el volumen crezca:
+
+1. **Activar facturación** en Google AI Studio. Es el paso natural y sube las
+   cuotas de golpe.
 2. **Cachear por foto.** Hoy cada publicación llama al modelo una vez; si
    alguien republica la misma mascota se vuelve a pagar. Un hash de la imagen
    como clave evitaría el segundo llamado.
@@ -137,6 +159,14 @@ inteligencia real del buscador— no depende de ningún proveedor.
   píxel.
 - **Los municipios salen del DANE**, no de una lista escrita a mano. El archivo
   `src/lib/cities.ts` se genera; no lo edités a mano.
+- **La búsqueda casi no excluye.** Solo la especie, la ciudad y si se perdió o se
+  encontró sacan avisos de la lista. El color, el tamaño, el sexo y las palabras
+  clave solo puntúan. El caso que lo justifica: con el sexo como filtro duro,
+  buscar "perra blanca" descartaba todos los animales encontrados cuyo sexo nadie
+  determinó — justo los que hay que mostrar.
+- **Se puede re-analizar las fotos** desde el link de gestión. Si la IA falla al
+  publicar (un pico de cuota), el aviso quedaba sin señas particulares para
+  siempre; ahora se recupera con un botón.
 
 ---
 
