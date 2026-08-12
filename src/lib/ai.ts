@@ -34,7 +34,27 @@ import {
  * Con facturación activa, `gemini-3.6-flash` da algo más de detalle: se cambia
  * por GEMINI_MODEL, sin tocar código.
  */
-const MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.5-flash-lite';
+const MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.1-flash-lite';
+
+/**
+ * Tope de espera para el análisis de fotos.
+ *
+ * Medido contra la API real: en la capa gratuita la latencia va de 4 a 83
+ * segundos según la cola del momento. Vercel corta la función a los 60, así que
+ * sin este tope un pico de cola tumbaba la publicación entera. Con él, el aviso
+ * igual se publica (ya está insertado antes de llamar al modelo) y las fotos se
+ * pueden re-analizar después desde el link de gestión.
+ */
+const ANALYSIS_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS ?? 40_000);
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} tardó más de ${Math.round(ms / 1000)}s.`)), ms),
+    ),
+  ]);
+}
 
 /**
  * Un 429 no se arregla reintentando: la cuota sigue agotada, y cada reintento
@@ -69,9 +89,23 @@ export function aiEnabled(): boolean {
 const UNKNOWN = 'no_se';
 const ANY = 'cualquiera';
 
+const comparacionesSchema = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      ref: { type: 'string' },
+      probabilidad: { type: 'number' },
+      razon: { type: 'string' },
+    },
+    required: ['ref', 'probabilidad', 'razon'],
+  },
+};
+
 const attributesSchema = {
   type: 'object',
   properties: {
+    comparaciones: comparacionesSchema,
     species: { type: 'string', enum: [...SPECIES, UNKNOWN] },
     colors: { type: 'array', items: { type: 'string', enum: [...COLORS] } },
     size: { type: 'string', enum: [...SIZES, UNKNOWN] },
@@ -96,6 +130,7 @@ const attributesSchema = {
     'collar_description',
     'summary',
     'keywords',
+    'comparaciones',
   ],
 };
 
@@ -111,6 +146,9 @@ const attributesParser = z.object({
   collar_description: z.string(),
   summary: z.string(),
   keywords: z.array(z.string()),
+  comparaciones: z
+    .array(z.object({ ref: z.string(), probabilidad: z.number(), razon: z.string() }))
+    .default([]),
 });
 
 const intentSchema = {
@@ -194,66 +232,122 @@ Escribí siempre en español de Colombia.`;
 
 type ImageInput = { mediaType: 'image/jpeg' | 'image/png' | 'image/webp'; data: string };
 
-export async function extractAttributes(input: {
+export type MatchResult = { ref: string; score: number; reason: string };
+
+/**
+ * Mira las fotos y, en la misma llamada, las compara contra avisos cercanos del
+ * tipo contrario.
+ *
+ * Una sola llamada y no dos: la cuota gratuita es lo que decide a cuánta gente
+ * podemos ayudar en un día, y separar esto en dos la gastaba al doble sin
+ * mejorar nada. Al contrario — así el modelo compara la foto real contra las
+ * descripciones, en vez de comparar el texto que él mismo acaba de escribir.
+ */
+export async function analyzePet(input: {
   images: ImageInput[];
   description: string;
   species?: Species | null;
-}): Promise<PetAttributes> {
+  candidates?: ComparablePet[];
+}): Promise<{ attributes: PetAttributes; matches: MatchResult[] }> {
+  const candidates = input.candidates ?? [];
+
+  type Bloque =
+    | { type: 'image'; data: string; mime_type: string }
+    | { type: 'text'; text: string };
+  const content: Bloque[] = [];
+  const partesImagen = input.images.slice(0, 4).map((image) => ({
+    type: 'image' as const,
+    data: image.data,
+    mime_type: image.mediaType,
+  }));
+
   const hints: string[] = [];
   if (input.species) hints.push(`Quien publica dice que es un ${input.species}.`);
   if (input.description.trim()) {
     hints.push(`Lo que escribió quien publica:\n"""\n${input.description.trim()}\n"""`);
   }
 
-  const prompt =
-    (hints.length
-      ? `${hints.join('\n\n')}\n\n`
-      : 'No hay descripción escrita; guiate solo por las fotos.\n\n') +
-    'Describí los rasgos físicos del animal de las fotos. Si la descripción escrita menciona algo que no se ve en la foto (por ejemplo una cicatriz tapada), podés incluirlo igual: quien publica conoce al animal.';
+  const partes = [
+    hints.length
+      ? hints.join('\n\n')
+      : 'No hay descripción escrita; guiate solo por las fotos.',
+    '',
+    'Describí los rasgos físicos del animal de las fotos. Si la descripción escrita menciona algo que no se ve en la foto (por ejemplo una cicatriz tapada), podés incluirlo igual: quien publica conoce al animal.',
+  ];
 
-  const interaction = await client().interactions.create({
-    model: MODEL,
-    system_instruction: EXTRACT_SYSTEM,
-    input: [
-      ...input.images.slice(0, 4).map((image) => ({
-        type: 'image' as const,
-        data: image.data,
-        mime_type: image.mediaType,
-      })),
-      { type: 'text' as const, text: prompt },
-    ],
-    response_format: {
-      type: 'text',
-      mime_type: 'application/json',
-      schema: attributesSchema,
+  if (candidates.length > 0) {
+    partes.push(
+      '',
+      'AVISOS CERCANOS DEL TIPO CONTRARIO, para comparar contra la foto:',
+      ...candidates.map((c) => `--- ref ${c.ref} ---\n${describe(c)}`),
+      '',
+      `Devolvé en "comparaciones" una entrada por cada uno, usando exactamente estas refs: ${candidates
+        .map((c) => c.ref)
+        .join(', ')}.`,
+    );
+  } else {
+    partes.push('', 'No hay avisos cercanos para comparar: devolvé "comparaciones" vacío.');
+  }
+
+  content.push(...partesImagen, { type: 'text' as const, text: partes.join('\n') });
+
+  const interaction = await withTimeout(
+    client().interactions.create(
+    {
+      model: MODEL,
+      system_instruction: EXTRACT_SYSTEM + (candidates.length > 0 ? MATCH_RULES : ''),
+      input: content,
+      response_format: {
+        type: 'text',
+        mime_type: 'application/json',
+        schema: attributesSchema,
+      },
+      generation_config: { max_output_tokens: 8000, thinking_level: 'low' },
     },
-    generation_config: {
-      // OJO: max_output_tokens incluye los tokens de razonamiento. Con el
-      // presupuesto justo, el modelo piensa hasta agotarlo y devuelve el JSON
-      // cortado a la mitad. Dejamos aire de sobra y limitamos el razonamiento.
-      max_output_tokens: 8000,
-      thinking_level: 'low',
-    },
-  }, REQUEST_OPTIONS);
+    REQUEST_OPTIONS,
+    ),
+    ANALYSIS_TIMEOUT_MS,
+    'El análisis de las fotos',
+  );
 
   const raw = attributesParser.parse(parseJson(interaction.output_text, 'analizar las fotos'));
+  const refsValidas = new Set(candidates.map((c) => c.ref));
 
   return {
-    species: pickEnum<Species>(raw.species, SPECIES),
-    colors: raw.colors
-      .map((c) => pickEnum<Color>(c, COLORS))
-      .filter((c): c is Color => c !== null)
-      .slice(0, 3),
-    size: pickEnum<Size>(raw.size, SIZES),
-    sex: pickEnum<Sex>(raw.sex, SEXES) ?? 'desconocido',
-    coat: raw.coat === UNKNOWN ? null : raw.coat || null,
-    breed_guess: raw.breed_guess.trim() || null,
-    marks: raw.marks.map((m) => m.trim()).filter(Boolean).slice(0, 6),
-    has_collar: raw.has_collar === 'si' ? true : raw.has_collar === 'no' ? false : null,
-    collar_description: raw.collar_description.trim() || null,
-    summary: raw.summary.trim(),
-    keywords: cleanKeywords(raw.keywords),
+    attributes: {
+      species: pickEnum<Species>(raw.species, SPECIES),
+      colors: raw.colors
+        .map((c) => pickEnum<Color>(c, COLORS))
+        .filter((c): c is Color => c !== null)
+        .slice(0, 3),
+      size: pickEnum<Size>(raw.size, SIZES),
+      sex: pickEnum<Sex>(raw.sex, SEXES) ?? 'desconocido',
+      coat: raw.coat === UNKNOWN ? null : raw.coat || null,
+      breed_guess: raw.breed_guess.trim() || null,
+      marks: raw.marks.map((m) => m.trim()).filter(Boolean).slice(0, 6),
+      has_collar: raw.has_collar === 'si' ? true : raw.has_collar === 'no' ? false : null,
+      collar_description: raw.collar_description.trim() || null,
+      summary: raw.summary.trim(),
+      keywords: cleanKeywords(raw.keywords),
+    },
+    matches: raw.comparaciones
+      .filter((c) => refsValidas.has(c.ref))
+      .map((c) => ({
+        ref: c.ref,
+        score: Math.max(0, Math.min(1, c.probabilidad)),
+        reason: c.razon.trim(),
+      })),
   };
+}
+
+/** Solo los atributos, para cuando se re-analizan las fotos de un aviso ya publicado. */
+export async function extractAttributes(input: {
+  images: ImageInput[];
+  description: string;
+  species?: Species | null;
+}): Promise<PetAttributes> {
+  const { attributes } = await analyzePet(input);
+  return attributes;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,55 +403,17 @@ export async function parseSearchQuery(query: string): Promise<SearchIntent> {
 
 // ---------------------------------------------------------------------------
 // Cruce entre avisos perdidos y encontrados
+//
+// Va dentro de la MISMA llamada que analiza la foto, no en una aparte. Son dos
+// preguntas sobre lo mismo —"¿cómo es este animal?" y "¿es alguno de estos?"—
+// y separarlas gastaba el doble de cuota gratuita, que es lo que decide cuánta
+// gente podemos ayudar en un día. Además así el modelo compara la foto real
+// contra las descripciones, en vez de comparar dos textos.
 // ---------------------------------------------------------------------------
 
-const COMPARE_SYSTEM = `Sos parte de Volvé a Casa, una plataforma colombiana de mascotas perdidas y encontradas. Te damos un aviso y varios avisos del tipo contrario en la misma zona. Decidís, para cada uno, qué tan probable es que se trate del MISMO animal.
-
-Cómo calibrar la probabilidad:
-- 0.9 a 1.0: coinciden en especie, colores y al menos una seña particular específica y poco común (una mancha con forma y ubicación, una oreja caída, una cicatriz, ojos de distinto color).
-- 0.6 a 0.8: coinciden en lo general y en algún detalle, pero falta confirmar algo o hay un dato que no calza.
-- 0.3 a 0.5: podrían serlo, pero solo coinciden rasgos comunes (un perro café mediano se parece a miles de perros cafés medianos).
-- 0.0 a 0.2: hay algo que los descarta — otra especie, colores incompatibles, o que el encontrado apareció antes de que el otro se perdiera.
-
-Tené en cuenta al comparar:
-- Dos personas describen distinto al mismo animal. Quien lo crió sabe la raza y el nombre; quien lo recogió en la calle solo ve un perro flaco y asustado. Que uno diga "mediano" y el otro "grande" no descarta nada.
-- El sexo suele estar sin determinar en los animales encontrados. Que no coincida no descarta; que coincida tampoco confirma mucho.
-- Las fechas sí importan: si lo encontraron antes de que se perdiera, no puede ser el mismo animal.
-- Un animal perdido cruza de barrio y hasta de municipio. La distancia no descarta.
-
-En "razon", explicá en una o dos frases, en español claro y para la familia que lo va a leer, qué coincide y qué no. Nombrá los detalles concretos. Si la probabilidad es baja, decí por qué no calza.
-
-Ser demasiado optimista tiene un costo real: le das falsas esperanzas a una familia que está sufriendo. Ser demasiado estricto tiene otro: se pierde un reencuentro. Calibrá con honestidad.`;
-
-const compareSchema = {
-  type: 'object',
-  properties: {
-    comparaciones: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          ref: { type: 'string' },
-          probabilidad: { type: 'number' },
-          razon: { type: 'string' },
-        },
-        required: ['ref', 'probabilidad', 'razon'],
-      },
-    },
-  },
-  required: ['comparaciones'],
-};
-
-const compareParser = z.object({
-  comparaciones: z.array(
-    z.object({ ref: z.string(), probabilidad: z.number(), razon: z.string() }),
-  ),
-});
-
-/** Un aviso reducido a lo que sirve para compararlo con otro. */
+/** Un aviso ya publicado, reducido a lo que sirve para compararlo con una foto. */
 export type ComparablePet = {
   ref: string;
-  kind: Kind;
   name?: string | null;
   description: string;
   colors: string[];
@@ -374,8 +430,7 @@ export type ComparablePet = {
 };
 
 function describe(pet: ComparablePet): string {
-  const partes = [
-    `Tipo: ${pet.kind === 'perdido' ? 'se perdió' : 'lo encontraron'}`,
+  return [
     pet.name ? `Nombre: ${pet.name}` : null,
     pet.ai_summary ? `Resumen: ${pet.ai_summary}` : null,
     pet.colors.length ? `Colores: ${pet.colors.join(', ')}` : null,
@@ -388,51 +443,28 @@ function describe(pet: ComparablePet): string {
     pet.event_date ? `Fecha del hecho: ${pet.event_date}` : null,
     `Publicado: ${pet.created_at.slice(0, 10)}`,
     `Lo que escribió la persona: ${pet.description.slice(0, 400)}`,
-  ].filter(Boolean);
-  return partes.join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
-/**
- * Compara un aviso contra varios candidatos del tipo contrario y devuelve, por
- * cada uno, qué tan probable es que sean el mismo animal.
- */
-export async function comparePets(
-  target: ComparablePet,
-  candidates: ComparablePet[],
-): Promise<{ ref: string; score: number; reason: string }[]> {
-  if (candidates.length === 0) return [];
+const MATCH_RULES = `
 
-  const prompt = [
-    'AVISO A COMPARAR:',
-    describe(target),
-    '',
-    'CANDIDATOS:',
-    ...candidates.map((c) => `--- ref ${c.ref} ---\n${describe(c)}`),
-    '',
-    `Devolvé una comparación por cada candidato, usando exactamente estas refs: ${candidates
-      .map((c) => c.ref)
-      .join(', ')}.`,
-  ].join('\n');
+SEGUNDA TAREA — comparar con otros avisos:
+Junto con la foto te damos avisos del tipo contrario publicados cerca. Por cada uno, decidí qué tan probable es que sea EL MISMO animal que el de la foto.
 
-  const interaction = await client().interactions.create(
-    {
-      model: MODEL,
-      system_instruction: COMPARE_SYSTEM,
-      input: prompt,
-      response_format: { type: 'text', mime_type: 'application/json', schema: compareSchema },
-      generation_config: { max_output_tokens: 8000, thinking_level: 'low' },
-    },
-    REQUEST_OPTIONS,
-  );
+Cómo calibrar la probabilidad:
+- 0.9 a 1.0: coinciden en especie, colores y al menos una seña particular específica y poco común (una mancha con forma y ubicación, una oreja caída, una cicatriz, ojos de distinto color).
+- 0.6 a 0.8: coinciden en lo general y en algún detalle, pero falta confirmar algo o hay un dato que no calza.
+- 0.3 a 0.5: podrían serlo, pero solo coinciden rasgos comunes (un perro café mediano se parece a miles de perros cafés medianos).
+- 0.0 a 0.2: hay algo que los descarta — otra especie, colores incompatibles, o que el encontrado apareció antes de que el otro se perdiera.
 
-  const raw = compareParser.parse(parseJson(interaction.output_text, 'comparar los avisos'));
-  const validRefs = new Set(candidates.map((c) => c.ref));
+Tené en cuenta al comparar:
+- Dos personas describen distinto al mismo animal. Quien lo crió sabe la raza y el nombre; quien lo recogió en la calle solo ve un perro flaco y asustado. Que uno diga "mediano" y el otro "grande" no descarta nada.
+- El sexo suele estar sin determinar en los animales encontrados. Que no coincida no descarta; que coincida tampoco confirma mucho.
+- Las fechas sí importan: si lo encontraron antes de que se perdiera, no puede ser el mismo animal.
+- Un animal perdido cruza de barrio y hasta de municipio. La distancia no descarta.
 
-  return raw.comparaciones
-    .filter((c) => validRefs.has(c.ref))
-    .map((c) => ({
-      ref: c.ref,
-      score: Math.max(0, Math.min(1, c.probabilidad)),
-      reason: c.razon.trim(),
-    }));
-}
+En "razon", explicá en una o dos frases, en español claro y para la familia que lo va a leer, qué coincide y qué no. Nombrá los detalles concretos. Si la probabilidad es baja, decí por qué no calza.
+
+Ser demasiado optimista tiene un costo real: le das falsas esperanzas a una familia que está sufriendo. Ser demasiado estricto tiene otro: se pierde un reencuentro. Calibrá con honestidad.`;

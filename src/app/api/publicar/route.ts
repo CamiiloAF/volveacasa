@@ -1,11 +1,11 @@
-import { after, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { extractAttributes, aiEnabled } from '@/lib/ai';
+import { aiEnabled, analyzePet } from '@/lib/ai';
 import { cityByCode } from '@/lib/cities';
 import { adminClient } from '@/lib/supabase';
 import { buildSearchText, buildSlug, randomSuffix } from '@/lib/text';
-import { findAndStoreMatches } from '@/lib/matching';
+import { fetchCandidates, storeMatches } from '@/lib/matching';
 import { generateManageToken, hashManageToken } from '@/lib/token';
 import { COLORS, KINDS, SEXES, SIZES, SPECIES, type PetAttributes } from '@/lib/types';
 
@@ -162,48 +162,24 @@ export async function POST(request: Request) {
     paths.push(path);
   }
 
-  // --- Atributos con IA ---------------------------------------------------
-  // Si la IA falla, la publicación igual sale. Un aviso sin atributos se
-  // encuentra por ciudad y por texto; uno que nunca se publicó no se encuentra.
-  let attributes = emptyAttributes();
-  let aiFailed = false;
-  if (aiEnabled()) {
-    try {
-      attributes = await extractAttributes({
-        images: images.map((i) => ({ mediaType: i.mediaType, data: i.bytes.toString('base64') })),
-        description: data.description,
-        species: data.species,
-      });
-    } catch (error) {
-      aiFailed = true;
-      console.error('extractAttributes falló:', error);
-    }
-  }
-
-  // Lo que la persona escogió a mano manda sobre lo que detectó la IA.
-  const colors = data.colors.length ? data.colors : attributes.colors;
-  const size = data.size ?? attributes.size;
-  const sex = data.sex !== 'desconocido' ? data.sex : attributes.sex;
-
+  // --- Se publica primero, se analiza después ------------------------------
+  // El aviso entra a la base sin los datos de la IA. Así conseguimos los
+  // avisos cercanos con los que compararlo y le mandamos al modelo las fotos y
+  // los candidatos en UNA sola llamada, en vez de gastar dos: la cuota gratuita
+  // es lo que decide a cuánta gente podemos ayudar en un día.
   const slug = buildSlug({ name: data.name ?? null, species: data.species, cityName: city.n });
+  const manageToken = generateManageToken();
 
-  const row = {
+  const baseRow = {
     slug,
     kind: data.kind,
     species: data.species,
     status: 'activo' as const,
     name: data.name?.trim() || null,
     description: data.description,
-    colors,
-    size,
-    sex,
-    coat: attributes.coat,
-    marks: attributes.marks,
-    has_collar: attributes.has_collar,
-    collar_description: attributes.collar_description,
-    breed_guess: attributes.breed_guess,
-    ai_summary: attributes.summary || null,
-    ai_keywords: attributes.keywords,
+    colors: data.colors,
+    size: data.size ?? null,
+    sex: data.sex,
     city_code: city.c,
     city_name: city.n,
     department: city.d,
@@ -219,55 +195,109 @@ export async function POST(request: Request) {
       name: data.name ?? null,
       description: data.description,
       species: data.species,
-      colors,
-      marks: attributes.marks,
-      keywords: attributes.keywords,
-      breed_guess: attributes.breed_guess,
-      coat: attributes.coat,
-      collar_description: attributes.collar_description,
-      ai_summary: attributes.summary,
+      colors: data.colors,
+      marks: [],
+      keywords: [],
+      breed_guess: null,
+      coat: null,
+      collar_description: null,
+      ai_summary: null,
       city_name: city.n,
       department: city.d,
       neighborhood: data.neighborhood ?? null,
     }),
-    manage_token_hash: '',
+    manage_token_hash: hashManageToken(manageToken),
   };
-
-  const manageToken = generateManageToken();
-  row.manage_token_hash = hashManageToken(manageToken);
 
   const { data: inserted, error } = await supabase
     .from('pets')
-    .insert(row)
+    .insert(baseRow)
     .select('id')
     .single();
-  if (error) {
+
+  if (error || !inserted) {
     await supabase.storage.from('fotos').remove(paths);
     return NextResponse.json(
-      { error: `No se pudo publicar: ${error.message}` },
+      { error: `No se pudo publicar: ${error?.message ?? 'error desconocido'}` },
       { status: 500 },
     );
   }
 
-  // Buscar coincidencias es otra llamada a la IA. Con after() corre cuando la
-  // respuesta ya salió, así que quien publica no espera por ella.
-  if (inserted?.id) {
-    after(async () => {
-      try {
-        const encontradas = await findAndStoreMatches(inserted.id);
-        if (encontradas > 0) {
-          console.log(`[cruce] ${encontradas} coincidencia(s) para ${slug}`);
-        }
-      } catch (cruceError) {
-        console.error('cruce falló:', cruceError);
+  // --- Una sola llamada: describir la foto y cruzarla con los avisos cercanos
+  // Si falla, el aviso ya quedó publicado. Se encuentra por ciudad y por texto,
+  // y desde el link de gestión se puede reintentar el análisis.
+  let attributes = emptyAttributes();
+  let aiFailed = false;
+  let matchCount = 0;
+
+  if (aiEnabled()) {
+    try {
+      const { rows, comparables } = await fetchCandidates(inserted.id);
+      const analysis = await analyzePet({
+        images: images.map((i) => ({ mediaType: i.mediaType, data: i.bytes.toString('base64') })),
+        description: data.description,
+        species: data.species,
+        candidates: comparables,
+      });
+      attributes = analysis.attributes;
+
+      if (rows.length > 0 && analysis.matches.length > 0) {
+        matchCount = await storeMatches({
+          petId: inserted.id,
+          petIsLost: data.kind === 'perdido',
+          rows,
+          results: analysis.matches,
+        });
       }
-    });
+    } catch (aiError) {
+      aiFailed = true;
+      console.error('analyzePet falló:', aiError);
+    }
+  }
+
+  // Lo que la persona escogió a mano manda sobre lo que detectó la IA.
+  const colors = data.colors.length ? data.colors : attributes.colors;
+
+  if (!aiFailed) {
+    const { error: updateError } = await supabase
+      .from('pets')
+      .update({
+        colors,
+        size: data.size ?? attributes.size,
+        sex: data.sex !== 'desconocido' ? data.sex : attributes.sex,
+        coat: attributes.coat,
+        marks: attributes.marks,
+        has_collar: attributes.has_collar,
+        collar_description: attributes.collar_description,
+        breed_guess: attributes.breed_guess,
+        ai_summary: attributes.summary || null,
+        ai_keywords: attributes.keywords,
+        search_text: buildSearchText({
+          name: data.name ?? null,
+          description: data.description,
+          species: data.species,
+          colors,
+          marks: attributes.marks,
+          keywords: attributes.keywords,
+          breed_guess: attributes.breed_guess,
+          coat: attributes.coat,
+          collar_description: attributes.collar_description,
+          ai_summary: attributes.summary,
+          city_name: city.n,
+          department: city.d,
+          neighborhood: data.neighborhood ?? null,
+        }),
+      })
+      .eq('id', inserted.id);
+
+    if (updateError) console.error('guardar atributos falló:', updateError);
   }
 
   return NextResponse.json({
     slug,
     manageToken,
     aiFailed,
+    matchCount,
     detected: {
       colors: attributes.colors,
       size: attributes.size,

@@ -1,13 +1,11 @@
 import 'server-only';
 
-import { aiEnabled, comparePets, type ComparablePet } from './ai';
+import type { ComparablePet, MatchResult } from './ai';
 import { SHOW_THRESHOLD, type PetMatch } from './match-shared';
 import { adminClient } from './supabase';
-import type { Kind } from './types';
 
 /** Debajo de esto ni siquiera guardamos: es ruido y llenaría la tabla. */
 const STORE_THRESHOLD = 0.4;
-
 
 type CandidateRow = {
   id: string;
@@ -28,98 +26,32 @@ type CandidateRow = {
 };
 
 /**
- * Busca avisos del tipo contrario que puedan ser el mismo animal y guarda las
- * coincidencias.
+ * Avisos del tipo contrario que podrían ser el mismo animal.
  *
- * Corre después de responderle a quien publica (con `after()` de Next), porque
- * es una segunda llamada a la IA y publicar ya se siente lento. Si falla, no
- * pasa nada grave: el aviso quedó publicado y el cruce se puede reintentar.
+ * Es el prefiltro barato en SQL antes de gastar tokens: misma especie, tipo
+ * contrario, activos, mismo municipio o al menos el mismo departamento. Se
+ * llama ANTES de la llamada a la IA para poder mandarle las fotos y los
+ * candidatos juntos, y resolver todo en una sola petición.
  */
-export async function findAndStoreMatches(petId: string): Promise<number> {
-  if (!aiEnabled()) return 0;
-
-  const supabase = adminClient();
-
-  const { data: pet, error: petError } = await supabase
-    .from('pets')
-    .select(
-      'id, kind, name, description, colors, size, sex, coat, marks, breed_guess, ai_summary, city_name, neighborhood, event_date, created_at, status',
-    )
-    .eq('id', petId)
-    .maybeSingle();
-
-  if (petError || !pet || pet.status !== 'activo') return 0;
-
-  const { data: candidates, error: candidatesError } = await supabase.rpc('match_candidates', {
+export async function fetchCandidates(
+  petId: string,
+  limit = 6,
+): Promise<{ rows: CandidateRow[]; comparables: ComparablePet[] }> {
+  const { data, error } = await adminClient().rpc('match_candidates', {
     p_pet_id: petId,
-    p_limit: 6,
+    p_limit: limit,
   });
 
-  if (candidatesError || !candidates?.length) return 0;
+  if (error || !data?.length) {
+    if (error) console.error('match_candidates falló:', error);
+    return { rows: [], comparables: [] };
+  }
 
-  const rows = candidates as CandidateRow[];
-  const target: ComparablePet = { ref: 'objetivo', kind: pet.kind as Kind, ...toComparable(pet) };
-  // La ref es el índice: no le pasamos los ids al modelo, así que no puede
-  // devolver uno inventado.
-  const comparables: ComparablePet[] = rows.map((row, index) => ({
+  const rows = data as CandidateRow[];
+  // La ref es el índice y no el id: el modelo nunca ve un identificador real,
+  // así que no puede devolver uno inventado.
+  const comparables = rows.map((row, index) => ({
     ref: String(index + 1),
-    kind: (pet.kind === 'perdido' ? 'encontrado' : 'perdido') as Kind,
-    ...toComparable(row),
-  }));
-
-  let results: { ref: string; score: number; reason: string }[];
-  try {
-    results = await comparePets(target, comparables);
-  } catch (error) {
-    console.error('comparePets falló:', error);
-    return 0;
-  }
-
-  const petIsLost = pet.kind === 'perdido';
-  const toStore = results
-    .filter((result) => result.score >= STORE_THRESHOLD)
-    .map((result) => {
-      const candidate = rows[Number(result.ref) - 1];
-      if (!candidate) return null;
-      return {
-        lost_id: petIsLost ? pet.id : candidate.id,
-        found_id: petIsLost ? candidate.id : pet.id,
-        score: result.score,
-        reason: result.reason,
-      };
-    })
-    .filter((row): row is NonNullable<typeof row> => row !== null);
-
-  if (toStore.length === 0) return 0;
-
-  const { error: upsertError } = await supabase
-    .from('pet_matches')
-    .upsert(toStore, { onConflict: 'lost_id,found_id' });
-
-  if (upsertError) {
-    console.error('guardar coincidencias falló:', upsertError);
-    return 0;
-  }
-
-  return toStore.filter((row) => row.score >= SHOW_THRESHOLD).length;
-}
-
-function toComparable(row: {
-  name: string | null;
-  description: string;
-  colors: string[];
-  size: string | null;
-  sex: string | null;
-  coat: string | null;
-  marks: string[];
-  breed_guess: string | null;
-  ai_summary: string | null;
-  city_name: string;
-  neighborhood: string | null;
-  event_date: string | null;
-  created_at: string;
-}): Omit<ComparablePet, 'ref' | 'kind'> {
-  return {
     name: row.name,
     description: row.description,
     colors: row.colors ?? [],
@@ -133,7 +65,44 @@ function toComparable(row: {
     neighborhood: row.neighborhood,
     event_date: row.event_date,
     created_at: row.created_at,
-  };
+  }));
+
+  return { rows, comparables };
+}
+
+/** Guarda lo que la IA respondió sobre los candidatos. Devuelve cuántas se mostrarán. */
+export async function storeMatches(input: {
+  petId: string;
+  petIsLost: boolean;
+  rows: CandidateRow[];
+  results: MatchResult[];
+}): Promise<number> {
+  const toStore = input.results
+    .filter((result) => result.score >= STORE_THRESHOLD)
+    .map((result) => {
+      const candidate = input.rows[Number(result.ref) - 1];
+      if (!candidate) return null;
+      return {
+        lost_id: input.petIsLost ? input.petId : candidate.id,
+        found_id: input.petIsLost ? candidate.id : input.petId,
+        score: result.score,
+        reason: result.reason,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
+
+  if (toStore.length === 0) return 0;
+
+  const { error } = await adminClient()
+    .from('pet_matches')
+    .upsert(toStore, { onConflict: 'lost_id,found_id' });
+
+  if (error) {
+    console.error('guardar coincidencias falló:', error);
+    return 0;
+  }
+
+  return toStore.filter((row) => row.score >= SHOW_THRESHOLD).length;
 }
 
 /** Coincidencias de un aviso, las mejores primero. */

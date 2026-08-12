@@ -115,15 +115,34 @@ reconoce colores y especie. Peor que la IA, muchísimo mejor que un error.
 
 Todo esto está **medido contra la API real**, no sacado de la documentación:
 
-| Modelo | Cuota gratuita | Sirve para |
+| Modelo | Precio (entrada / salida por millón) | Nota |
 |---|---|---|
-| `gemini-3.5-flash-lite` | usable | **el default**: producción sin facturación |
-| `gemini-3.6-flash` | se agota a las 20 peticiones | probar, o con facturación activa |
+| **`gemini-3.1-flash-lite`** | **$0.25 / $1.50** | **el default** |
+| `gemini-3.5-flash-lite` | $0.30 / $2.50 | igual de bueno, más caro |
+| `gemini-3.6-flash` | más caro aún | agota su cuota gratuita a las 20 peticiones |
+| `gemini-2.5-flash-lite` | — | ya no se le da a cuentas nuevas |
 
-Por eso el default es Flash-Lite. Describiendo la foto de una mascota se
-comporta casi igual: en la prueba con un gato bicolor sacó "manchas negras en el
-hocico tipo bigote", "mancha negra en la barbilla" y "orejas negras". Flash da
-algo más de detalle (agregó el color de los ojos) y cuesta más.
+Elegido midiendo contra la API real con la foto de un perro y dos candidatos —
+uno que sí era el mismo animal y otro que claramente no. Flash-Lite 3.1 acertó
+igual que los caros (1.0 al que coincidía, 0.0 al que no) y saca las mismas
+señas particulares.
+
+**La latencia no sirve para decidir**: en la capa gratuita va de 4 a 83 segundos
+según la cola del momento, y varía más entre dos llamadas al mismo modelo que
+entre modelos distintos. Por eso hay un tope de espera (`GEMINI_TIMEOUT_MS`, 40s
+por defecto): Vercel corta la función a los 60 y sin ese tope un pico de cola
+tumbaba la publicación entera.
+
+**Sobre los límites gratuitos:** Google dejó de publicarlos por modelo —
+dependen de la cuenta y la región. Los tuyos están en
+[aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit).
+
+**Una sola llamada por publicación.** Describir la foto y cruzarla contra los
+avisos cercanos son dos preguntas sobre lo mismo, así que van juntas: se
+inserta el aviso primero (sin datos de IA), se consultan los candidatos, y una
+única llamada devuelve los atributos y las comparaciones. Separarlas gastaba el
+doble de cuota sin mejorar nada — al contrario, así el modelo compara la foto
+real contra las descripciones en vez de comparar dos textos.
 
 Dos detalles que cuestan plata si no se saben:
 
