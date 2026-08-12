@@ -14,6 +14,7 @@ type Contact = { name: string; phone: string; whatsapp: boolean; waNumber: strin
 export function ContactReveal({ slug, contactName }: { slug: string; contactName: string }) {
   const [contact, setContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
 
   async function reveal() {
@@ -55,25 +56,55 @@ export function ContactReveal({ slug, contactName }: { slug: string; contactName
   }
 
   return (
-    <div className="flex flex-col sm:flex-row gap-2 fade-up">
-      {contact.whatsapp && contact.waNumber && (
+    <div className="flex flex-col gap-2 fade-up">
+      <div className="flex flex-col sm:flex-row gap-2">
+        {contact.whatsapp && contact.waNumber && (
+          <a
+            href={`https://wa.me/${contact.waNumber}?text=${encodeURIComponent(
+              `Hola ${contact.name}, te escribo por el aviso de Volvé a Casa.`,
+            )}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex-1 text-center px-5 py-3 rounded-xl bg-primary text-primary-ink font-bold"
+          >
+            Escribir por WhatsApp
+          </a>
+        )}
+        {/*
+          El número no se escribe en pantalla: viaja en el enlace y aparece
+          recién en la app de llamadas. Así no queda a la vista de quien mire
+          por encima del hombro, ni en una captura que después circule.
+        */}
         <a
-          href={`https://wa.me/${contact.waNumber}?text=${encodeURIComponent(
-            `Hola ${contact.name}, te escribo por el aviso de Volvé a Casa.`,
-          )}`}
-          target="_blank"
-          rel="noreferrer"
-          className="flex-1 text-center px-5 py-3 rounded-xl bg-primary text-primary-ink font-bold"
+          href={`tel:${contact.phone.replace(/\s/g, '')}`}
+          className="flex-1 text-center px-5 py-3 rounded-xl border border-border bg-surface font-bold hover:border-primary transition-colors"
         >
-          Escribir por WhatsApp
+          Llamar
         </a>
-      )}
-      <a
-        href={`tel:${contact.phone.replace(/\s/g, '')}`}
-        className="flex-1 text-center px-5 py-3 rounded-xl border border-border bg-surface font-bold hover:border-primary transition-colors"
+      </div>
+
+      {/*
+        En computador el enlace tel: no abre nada, y sin los dígitos a la vista
+        la persona se quedaría sin poder llamar. Copiar resuelve eso sin
+        mostrar el número en ningún momento.
+      */}
+      <button
+        type="button"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(contact.phone);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2500);
+          } catch {
+            setError('Tu navegador no dejó copiar. Usá el botón de llamar.');
+          }
+        }}
+        className="self-start text-sm font-semibold text-primary px-1 py-1"
       >
-        Llamar {contact.phone}
-      </a>
+        {copied ? '✓ Número copiado al portapapeles' : 'Copiar el número'}
+      </button>
+
+      {error && <p className="text-sm text-lost font-medium">{error}</p>}
     </div>
   );
 }
