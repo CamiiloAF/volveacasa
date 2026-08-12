@@ -105,6 +105,24 @@ body {
   margin-bottom: 0.375rem;
 }
 
+/*
+  Barra indeterminada: se usa mientras la IA mira las fotos, que es un tiempo
+  que no podemos medir. Se mueve para mostrar que algo pasa, pero nunca finge
+  un porcentaje — decirle a alguien "45%" cuando no lo sabemos es mentirle.
+*/
+@keyframes slide-indeterminate {
+  from {
+    transform: translateX(-60%);
+  }
+  to {
+    transform: translateX(220%);
+  }
+}
+
+@utility bar-indeterminate {
+  animation: slide-indeterminate 1.4s ease-in-out infinite;
+}
+
 @keyframes fade-up {
   from {
     opacity: 0;

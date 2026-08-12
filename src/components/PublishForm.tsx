@@ -5,6 +5,7 @@ import { useState } from 'react';
 
 import { CityPicker } from '@/components/CityPicker';
 import { PhotoPicker } from '@/components/PhotoPicker';
+import { PublishProgress, type PublishStage } from '@/components/PublishProgress';
 import {
   COLORS,
   COLOR_LABEL,
@@ -46,6 +47,8 @@ export function PublishForm() {
   const [reward, setReward] = useState('');
 
   const [sending, setSending] = useState(false);
+  const [stage, setStage] = useState<PublishStage>('preparando');
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState<Success | null>(null);
 
@@ -65,6 +68,9 @@ export function PublishForm() {
     }
 
     setSending(true);
+    setStage('preparando');
+    setUploadPercent(0);
+
     try {
       const form = new FormData();
       files.forEach((file) => form.append('fotos', file));
@@ -88,16 +94,54 @@ export function PublishForm() {
         }),
       );
 
-      const response = await fetch('/api/publicar', { method: 'POST', body: form });
-      const data = await response.json();
-      if (!response.ok) {
-        setError(data.error ?? 'No se pudo publicar. Intentá otra vez.');
-        return;
-      }
-      setSuccess(data as Success);
+      // XMLHttpRequest y no fetch porque es lo único que reporta el avance de
+      // la subida. En un celular con datos lentos, subir las fotos es la parte
+      // más larga, y es justo la que sí podemos medir de verdad.
+      const data = await new Promise<Success>((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open('POST', '/api/publicar');
+
+        request.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+          setStage('subiendo');
+          setUploadPercent((event.loaded / event.total) * 100);
+        };
+
+        // Terminó de subir: de acá en adelante manda el servidor y la IA, y
+        // cuánto tarde eso no lo sabemos.
+        request.upload.onload = () => {
+          setUploadPercent(100);
+          setStage('analizando');
+        };
+
+        request.onload = () => {
+          let body: { error?: string } & Partial<Success>;
+          try {
+            body = JSON.parse(request.responseText);
+          } catch {
+            reject(new Error('El servidor respondió algo inesperado.'));
+            return;
+          }
+          if (request.status >= 200 && request.status < 300) resolve(body as Success);
+          else reject(new Error(body.error ?? 'No se pudo publicar. Intentá otra vez.'));
+        };
+
+        request.onerror = () =>
+          reject(new Error('Se cayó la conexión antes de terminar. Intentá otra vez.'));
+        request.ontimeout = () =>
+          reject(new Error('La conexión tardó demasiado. Intentá otra vez.'));
+
+        request.send(form);
+      });
+
+      setSuccess(data);
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch {
-      setError('Se cayó la conexión antes de terminar. Revisá tus datos e intentá otra vez.');
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : 'Se cayó la conexión antes de terminar. Revisá tus datos e intentá otra vez.',
+      );
     } finally {
       setSending(false);
     }
@@ -398,13 +442,16 @@ export function PublishForm() {
         </p>
       )}
 
-      <button
-        type="submit"
-        disabled={sending}
-        className="px-6 py-4 rounded-xl bg-primary text-primary-ink font-bold text-lg disabled:opacity-60 transition-opacity"
-      >
-        {sending ? 'Publicando y analizando la foto…' : 'Publicar aviso'}
-      </button>
+      {sending ? (
+        <PublishProgress stage={stage} uploadPercent={uploadPercent} />
+      ) : (
+        <button
+          type="submit"
+          className="px-6 py-4 rounded-xl bg-primary text-primary-ink font-bold text-lg transition-opacity"
+        >
+          Publicar aviso
+        </button>
+      )}
     </form>
   );
 }
