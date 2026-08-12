@@ -4,8 +4,10 @@ import Link from 'next/link';
 import { useState } from 'react';
 
 import { CityPicker } from '@/components/CityPicker';
+import { cityLabel } from '@/lib/cities';
 import { PhotoPicker } from '@/components/PhotoPicker';
 import { PublishProgress, type PublishStage } from '@/components/PublishProgress';
+import { saveListing } from '@/lib/misavisos';
 import {
   COLORS,
   COLOR_LABEL,
@@ -132,6 +134,14 @@ export function PublishForm() {
           reject(new Error('La conexión tardó demasiado. Intentá otra vez.'));
 
         request.send(form);
+      });
+
+      // Queda guardado en este dispositivo para que la persona lo recupere si
+      // pierde el link. Nunca sale del navegador.
+      saveListing({
+        slug: data.slug,
+        token: data.manageToken,
+        label: (lost && name.trim()) || `${SPECIES_LABEL[species]} en ${cityLabel(cityCode)}`,
       });
 
       setSuccess(data);
@@ -575,6 +585,15 @@ function SuccessPanel({ success }: { success: Success }) {
         >
           Enviármelo por WhatsApp →
         </a>
+
+        <p className="text-sm text-ink-soft mt-3 border-t border-border pt-3">
+          Ya lo guardamos en este dispositivo: si volvés desde este mismo celular lo encontrás en{' '}
+          <Link href="/mis-avisos" className="font-semibold text-primary">
+            Mis avisos
+          </Link>
+          . Aun así mandátelo por WhatsApp — si cambiás de teléfono, esa copia es la única que
+          queda.
+        </p>
       </div>
     </div>
   );

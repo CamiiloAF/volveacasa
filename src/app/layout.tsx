@@ -52,6 +52,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 Buscar
               </Link>
               <Link
+                href="/mis-avisos"
+                className="hidden sm:inline-block px-3 py-2 rounded-lg font-medium hover:bg-surface-soft transition-colors"
+              >
+                Mis avisos
+              </Link>
+              <Link
                 href="/publicar"
                 className="px-4 py-2 rounded-lg bg-primary text-primary-ink font-semibold hover:opacity-90 transition-opacity"
               >
@@ -74,6 +80,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </Link>
               <Link href="/publicar" className="hover:text-ink transition-colors">
                 Publicar
+              </Link>
+              <Link href="/mis-avisos" className="hover:text-ink transition-colors">
+                Mis avisos
               </Link>
             </p>
           </div>

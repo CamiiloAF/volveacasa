@@ -3,11 +3,12 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { ContactReveal } from '@/components/ContactReveal';
 import { ShareButtons } from '@/components/ShareButtons';
 import { KindBadge, PetGrid } from '@/components/PetCard';
 import { getPetBySlug, similarPets } from '@/lib/pets';
 import { photoUrl } from '@/lib/supabase';
-import { longDate, relativeDate, whatsappNumber } from '@/lib/text';
+import { longDate, relativeDate } from '@/lib/text';
 import {
   COLOR_LABEL,
   SEX_LABEL,
@@ -69,7 +70,6 @@ export default async function PetPage({ params }: { params: Promise<{ slug: stri
   const similar = await similarPets(pet).catch(() => []);
   const lost = pet.kind === 'perdido';
   const reunited = pet.status === 'reunido';
-  const wa = whatsappNumber(pet.contact_phone);
 
   const facts: { label: string; value: string }[] = [
     { label: 'Especie', value: SPECIES_LABEL[pet.species] },
@@ -171,26 +171,7 @@ export default async function PetPage({ params }: { params: Promise<{ slug: stri
                 Contacto: <strong className="text-ink">{pet.contact_name}</strong>
               </p>
 
-              <div className="flex flex-col sm:flex-row gap-2">
-                {pet.contact_whatsapp && (
-                  <a
-                    href={`https://wa.me/${wa}?text=${encodeURIComponent(
-                      `Hola ${pet.contact_name}, te escribo por el aviso de Volvé a Casa.`,
-                    )}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex-1 text-center px-5 py-3 rounded-xl bg-primary text-primary-ink font-bold"
-                  >
-                    Escribir por WhatsApp
-                  </a>
-                )}
-                <a
-                  href={`tel:${pet.contact_phone.replace(/\s/g, '')}`}
-                  className="flex-1 text-center px-5 py-3 rounded-xl border border-border bg-surface font-bold hover:border-primary transition-colors"
-                >
-                  Llamar {pet.contact_phone}
-                </a>
-              </div>
+              <ContactReveal slug={pet.slug} contactName={pet.contact_name} />
             </div>
           )}
 

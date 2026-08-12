@@ -34,6 +34,8 @@ migraciones en orden**:
    tabla, índices, funciones de búsqueda, políticas de seguridad y bucket de fotos.
 2. [`supabase/migrations/0002_busqueda_sin_excluir.sql`](supabase/migrations/0002_busqueda_sin_excluir.sql)
    — hace que el tamaño y el sexo puntúen en vez de excluir.
+3. [`supabase/migrations/0003_proteger_telefonos.sql`](supabase/migrations/0003_proteger_telefonos.sql)
+   — tope por IP para que no se puedan recolectar los teléfonos en masa.
 
 ### 3. Variables de entorno
 
@@ -167,6 +169,16 @@ inteligencia real del buscador— no depende de ningún proveedor.
 - **Se puede re-analizar las fotos** desde el link de gestión. Si la IA falla al
   publicar (un pico de cuota), el aviso quedaba sin señas particulares para
   siempre; ahora se recupera con un botón.
+- **El teléfono no va en el HTML.** Sale de `/api/contacto/<slug>` cuando alguien
+  toca "Ver cómo contactar". Antes bastaba recorrer el sitemap una vez para
+  llevarse todos los celulares de gente en una situación vulnerable; ahora hace
+  falta una petición por aviso y hay un tope diario por IP. No lo vuelve
+  imposible —nada que un humano pueda ver lo es— pero sí lo vuelve caro.
+- **No hay recuperación del link de gestión por teléfono, y es a propósito.** El
+  teléfono es público en el aviso: cualquiera que lo lea pediría el link y se
+  apoderaría de la publicación, con el riesgo real de que le cambien el contacto
+  a un aviso de mascota perdida para extorsionar a la familia. La recuperación
+  necesita un canal que la persona controle (correo o SMS), no un dato visible.
 
 ---
 
@@ -182,18 +194,38 @@ src/
       page.tsx                     Detalle público
       opengraph-image.tsx          Previsualización para WhatsApp
     gestionar/[token]/             Edición con el link secreto
+    mis-avisos/                    Avisos guardados en este dispositivo
     api/
       publicar/                    Sube fotos, llama a Gemini, inserta
       buscar/                      Interpreta la búsqueda y consulta
       gestionar/[token]/           Editar, marcar reunido, eliminar
+      contacto/[slug]/             Entrega el teléfono, con tope por IP
       diagnostico/                 Chequeo de salud
   lib/
     ai.ts                          Los dos prompts y sus esquemas (Gemini)
     cities.ts                      1.122 municipios (generado)
+    misavisos.ts                   Links de gestión guardados en el navegador
     pets.ts                        Acceso a datos
     types.ts                       Vocabulario cerrado
 supabase/migrations/0001_init.sql  Esquema completo
 ```
+
+---
+
+## Recuperar el link de gestión
+
+Sin cuentas, el link es la única llave. Hay dos capas:
+
+1. **"Mis avisos"** (`/mis-avisos`) — al publicar, el link queda guardado en el
+   `localStorage` del navegador. Quien vuelve desde el mismo celular lo
+   encuentra ahí. Gratis, instantáneo y sin exponer nada: no viaja al servidor.
+2. **La copia por WhatsApp** que se ofrece al publicar. Es la que sobrevive a un
+   cambio de teléfono.
+
+Si alguien pierde las dos, hoy no hay forma de devolvérselo: del código solo se
+guarda su hash. La solución pendiente es **recuperación por correo** — pedir un
+email opcional al publicar y mandar el link ahí. El correo sirve porque no es
+público; el teléfono no, por lo explicado más arriba.
 
 ---
 
