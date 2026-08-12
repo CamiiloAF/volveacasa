@@ -4,7 +4,10 @@ import { getPetBySlug } from '@/lib/pets';
 import { photoUrl } from '@/lib/supabase';
 import { SPECIES_LABEL } from '@/lib/types';
 
-export const size = { width: 1200, height: 630 };
+// 600x315 y no 1200x630: WhatsApp descarta la previsualización cuando la
+// imagen pesa de más, y a 1200x630 este PNG daba 773 KB — por eso los avisos
+// se compartían sin foto. A esta medida pesa ~224 KB y siempre se ve.
+export const size = { width: 600, height: 315 };
 export const contentType = 'image/png';
 export const alt = 'Aviso de mascota en Volvé a Casa';
 
@@ -29,14 +32,20 @@ export default async function Image({ params }: { params: Promise<{ slug: string
             justifyContent: 'center',
             background: '#fbf7f0',
             color: '#0e7c6b',
-            fontSize: 64,
+            fontSize: 32,
             fontWeight: 800,
           }}
         >
-          🐾 Volvé a Casa
+          Volvé a Casa
         </div>
       ),
-      size,
+      { ...size,
+      headers: {
+        // Sin esto se regeneraba en cada visita del crawler (x-vercel-cache:
+        // MISS siempre), y una previsualización lenta es una que no se ve.
+        'cache-control': 'public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800',
+      },
+      },
     );
   }
 
@@ -64,9 +73,9 @@ export default async function Image({ params }: { params: Promise<{ slug: string
           <img
             src={cover}
             alt=""
-            width={520}
-            height={630}
-            style={{ width: 520, height: 630, objectFit: 'cover' }}
+            width={260}
+            height={315}
+            style={{ width: 260, height: 315, objectFit: 'cover' }}
           />
         )}
 
@@ -76,8 +85,8 @@ export default async function Image({ params }: { params: Promise<{ slug: string
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'center',
-            padding: 56,
-            gap: 20,
+            padding: 28,
+            gap: 10,
           }}
         >
           <div
@@ -86,9 +95,9 @@ export default async function Image({ params }: { params: Promise<{ slug: string
               alignSelf: 'flex-start',
               background: badgeColor,
               color: '#ffffff',
-              fontSize: 24,
+              fontSize: 13,
               fontWeight: 700,
-              padding: '10px 22px',
+              padding: '5px 11px',
               borderRadius: 999,
               letterSpacing: 1,
             }}
@@ -96,32 +105,38 @@ export default async function Image({ params }: { params: Promise<{ slug: string
             {badge}
           </div>
 
-          <div style={{ display: 'flex', fontSize: 58, fontWeight: 800, color: '#1c2523', lineHeight: 1.1 }}>
+          <div style={{ display: 'flex', fontSize: 29, fontWeight: 800, color: '#1c2523', lineHeight: 1.1 }}>
             {title}
           </div>
 
-          <div style={{ display: 'flex', fontSize: 28, color: '#5c6663', lineHeight: 1.35 }}>
+          <div style={{ display: 'flex', fontSize: 14, color: '#5c6663', lineHeight: 1.35 }}>
             {summary.length > 110 ? `${summary.slice(0, 110)}…` : summary}
           </div>
 
-          <div style={{ display: 'flex', fontSize: 30, fontWeight: 600, color: '#1c2523' }}>
-            📍 {pet.city_name}, {pet.department}
+          <div style={{ display: 'flex', fontSize: 15, fontWeight: 600, color: '#1c2523' }}>
+            {pet.city_name}, {pet.department}
           </div>
 
           <div
             style={{
               display: 'flex',
-              marginTop: 8,
-              fontSize: 24,
+              marginTop: 4,
+              fontSize: 13,
               fontWeight: 700,
               color: '#0e7c6b',
             }}
           >
-            🐾 Volvé a Casa
+            Volvé a Casa
           </div>
         </div>
       </div>
     ),
-    size,
+    { ...size,
+      headers: {
+        // Sin esto se regeneraba en cada visita del crawler (x-vercel-cache:
+        // MISS siempre), y una previsualización lenta es una que no se ve.
+        'cache-control': 'public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800',
+      },
+    },
   );
 }

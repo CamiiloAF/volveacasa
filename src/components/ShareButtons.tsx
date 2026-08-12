@@ -9,7 +9,8 @@ import { useState } from 'react';
 export function ShareButtons({ slug, title }: { slug: string; title: string }) {
   const [copied, setCopied] = useState(false);
   const url = typeof window !== 'undefined' ? `${window.location.origin}/mascota/${slug}` : '';
-  const message = `${title} — ayudanos a compartir 🐾`;
+  // Sin emoji: algunas versiones de WhatsApp lo mostraban como "\uFFFD".
+  const message = `${title} — ayudanos a compartir`;
 
   async function share() {
     if (navigator.share) {

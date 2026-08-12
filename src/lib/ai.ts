@@ -306,3 +306,133 @@ export async function parseSearchQuery(query: string): Promise<SearchIntent> {
     keywords: cleanKeywords(raw.keywords).slice(0, 10),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Cruce entre avisos perdidos y encontrados
+// ---------------------------------------------------------------------------
+
+const COMPARE_SYSTEM = `Sos parte de Volvé a Casa, una plataforma colombiana de mascotas perdidas y encontradas. Te damos un aviso y varios avisos del tipo contrario en la misma zona. Decidís, para cada uno, qué tan probable es que se trate del MISMO animal.
+
+Cómo calibrar la probabilidad:
+- 0.9 a 1.0: coinciden en especie, colores y al menos una seña particular específica y poco común (una mancha con forma y ubicación, una oreja caída, una cicatriz, ojos de distinto color).
+- 0.6 a 0.8: coinciden en lo general y en algún detalle, pero falta confirmar algo o hay un dato que no calza.
+- 0.3 a 0.5: podrían serlo, pero solo coinciden rasgos comunes (un perro café mediano se parece a miles de perros cafés medianos).
+- 0.0 a 0.2: hay algo que los descarta — otra especie, colores incompatibles, o que el encontrado apareció antes de que el otro se perdiera.
+
+Tené en cuenta al comparar:
+- Dos personas describen distinto al mismo animal. Quien lo crió sabe la raza y el nombre; quien lo recogió en la calle solo ve un perro flaco y asustado. Que uno diga "mediano" y el otro "grande" no descarta nada.
+- El sexo suele estar sin determinar en los animales encontrados. Que no coincida no descarta; que coincida tampoco confirma mucho.
+- Las fechas sí importan: si lo encontraron antes de que se perdiera, no puede ser el mismo animal.
+- Un animal perdido cruza de barrio y hasta de municipio. La distancia no descarta.
+
+En "razon", explicá en una o dos frases, en español claro y para la familia que lo va a leer, qué coincide y qué no. Nombrá los detalles concretos. Si la probabilidad es baja, decí por qué no calza.
+
+Ser demasiado optimista tiene un costo real: le das falsas esperanzas a una familia que está sufriendo. Ser demasiado estricto tiene otro: se pierde un reencuentro. Calibrá con honestidad.`;
+
+const compareSchema = {
+  type: 'object',
+  properties: {
+    comparaciones: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string' },
+          probabilidad: { type: 'number' },
+          razon: { type: 'string' },
+        },
+        required: ['ref', 'probabilidad', 'razon'],
+      },
+    },
+  },
+  required: ['comparaciones'],
+};
+
+const compareParser = z.object({
+  comparaciones: z.array(
+    z.object({ ref: z.string(), probabilidad: z.number(), razon: z.string() }),
+  ),
+});
+
+/** Un aviso reducido a lo que sirve para compararlo con otro. */
+export type ComparablePet = {
+  ref: string;
+  kind: Kind;
+  name?: string | null;
+  description: string;
+  colors: string[];
+  size?: string | null;
+  sex?: string | null;
+  coat?: string | null;
+  marks: string[];
+  breed_guess?: string | null;
+  ai_summary?: string | null;
+  city_name: string;
+  neighborhood?: string | null;
+  event_date?: string | null;
+  created_at: string;
+};
+
+function describe(pet: ComparablePet): string {
+  const partes = [
+    `Tipo: ${pet.kind === 'perdido' ? 'se perdió' : 'lo encontraron'}`,
+    pet.name ? `Nombre: ${pet.name}` : null,
+    pet.ai_summary ? `Resumen: ${pet.ai_summary}` : null,
+    pet.colors.length ? `Colores: ${pet.colors.join(', ')}` : null,
+    pet.size ? `Tamaño: ${pet.size}` : null,
+    pet.sex && pet.sex !== 'desconocido' ? `Sexo: ${pet.sex}` : null,
+    pet.coat ? `Pelaje: ${pet.coat}` : null,
+    pet.breed_guess ? `Raza aparente: ${pet.breed_guess}` : null,
+    pet.marks.length ? `Señas: ${pet.marks.join('; ')}` : null,
+    `Lugar: ${pet.neighborhood ? `${pet.neighborhood}, ` : ''}${pet.city_name}`,
+    pet.event_date ? `Fecha del hecho: ${pet.event_date}` : null,
+    `Publicado: ${pet.created_at.slice(0, 10)}`,
+    `Lo que escribió la persona: ${pet.description.slice(0, 400)}`,
+  ].filter(Boolean);
+  return partes.join('\n');
+}
+
+/**
+ * Compara un aviso contra varios candidatos del tipo contrario y devuelve, por
+ * cada uno, qué tan probable es que sean el mismo animal.
+ */
+export async function comparePets(
+  target: ComparablePet,
+  candidates: ComparablePet[],
+): Promise<{ ref: string; score: number; reason: string }[]> {
+  if (candidates.length === 0) return [];
+
+  const prompt = [
+    'AVISO A COMPARAR:',
+    describe(target),
+    '',
+    'CANDIDATOS:',
+    ...candidates.map((c) => `--- ref ${c.ref} ---\n${describe(c)}`),
+    '',
+    `Devolvé una comparación por cada candidato, usando exactamente estas refs: ${candidates
+      .map((c) => c.ref)
+      .join(', ')}.`,
+  ].join('\n');
+
+  const interaction = await client().interactions.create(
+    {
+      model: MODEL,
+      system_instruction: COMPARE_SYSTEM,
+      input: prompt,
+      response_format: { type: 'text', mime_type: 'application/json', schema: compareSchema },
+      generation_config: { max_output_tokens: 8000, thinking_level: 'low' },
+    },
+    REQUEST_OPTIONS,
+  );
+
+  const raw = compareParser.parse(parseJson(interaction.output_text, 'comparar los avisos'));
+  const validRefs = new Set(candidates.map((c) => c.ref));
+
+  return raw.comparaciones
+    .filter((c) => validRefs.has(c.ref))
+    .map((c) => ({
+      ref: c.ref,
+      score: Math.max(0, Math.min(1, c.probabilidad)),
+      reason: c.razon.trim(),
+    }));
+}
