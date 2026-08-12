@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { aiEnabled, parseSearchQuery } from '@/lib/ai';
+import { siteUrl, siteUrlIsFallback } from '@/lib/site';
 import { adminClient } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
@@ -10,19 +11,40 @@ type Check = { nombre: string; ok: boolean; detalle: string };
 
 /**
  * Chequeo de salud para usar después de desplegar. Verifica lo que suele
- * quedar a medias: variables de entorno, migración corrida y llave de Claude
+ * quedar a medias: variables de entorno, migraciones corridas y llave de Gemini
  * viva. Devuelve 503 si algo falla, para poder engancharlo a un monitor.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const checks: Check[] = [];
 
-  checks.push({
-    nombre: 'NEXT_PUBLIC_SITE_URL',
-    ok: Boolean(process.env.NEXT_PUBLIC_SITE_URL),
-    detalle: process.env.NEXT_PUBLIC_SITE_URL
-      ? process.env.NEXT_PUBLIC_SITE_URL
-      : 'Sin esta variable, las previsualizaciones de WhatsApp apuntan a localhost.',
-  });
+  // Comparamos la variable contra el dominio por el que realmente llegó esta
+  // petición. Es el chequeo que atrapa el error más caro de todos: si apuntan a
+  // distinto sitio, compartir un aviso por WhatsApp no muestra la foto y el
+  // link lleva a otro lado — y nada más en la app se ve roto, así que sin este
+  // aviso el problema pasa desapercibido.
+  const configured = siteUrl();
+  const realHost =
+    request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? '';
+
+  if (siteUrlIsFallback()) {
+    checks.push({
+      nombre: 'NEXT_PUBLIC_SITE_URL',
+      ok: false,
+      detalle:
+        'Sin configurar (o mal escrita). Las previsualizaciones de WhatsApp van a apuntar a localhost.',
+    });
+  } else {
+    const configuredHost = new URL(configured).host;
+    const matches = !realHost || configuredHost === realHost;
+    checks.push({
+      nombre: 'NEXT_PUBLIC_SITE_URL',
+      ok: matches,
+      detalle: matches
+        ? configured
+        : `Apunta a "${configuredHost}" pero este sitio responde en "${realHost}". ` +
+          `Compartir un aviso no va a mostrar la foto. Corregila a https://${realHost} y volvé a desplegar.`,
+    });
+  }
 
   // --- Base de datos ------------------------------------------------------
   try {

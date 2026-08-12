@@ -1,10 +1,12 @@
 import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
 
+import { siteUrlObject } from '@/lib/site';
+
 import './globals.css';
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'),
+  metadataBase: siteUrlObject(),
   title: {
     default: 'Volvé a Casa — mascotas perdidas y encontradas en Colombia',
     template: '%s · Volvé a Casa',

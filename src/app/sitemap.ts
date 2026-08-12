@@ -1,12 +1,9 @@
 import type { MetadataRoute } from 'next';
 
+import { siteUrl } from '@/lib/site';
 import { adminClient } from '@/lib/supabase';
 
 export const revalidate = 3600;
-
-function siteUrl(): string {
-  return (process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
-}
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = siteUrl();
