@@ -6,8 +6,9 @@ Gratis, sin crear cuenta, y con búsqueda en lenguaje natural: se escribe
 
 - **Publicar sin cuenta.** Al final se entrega un link secreto de gestión para
   editar el aviso o marcar que ya apareció.
-- **IA que mira la foto.** Claude extrae color, tamaño, raza aparente y señas
-  particulares, y eso es lo que después hace que la búsqueda encuentre.
+- **IA que mira la foto.** Gemini Flash extrae color, tamaño, raza aparente y
+  señas particulares, y eso es lo que después hace que la búsqueda encuentre.
+  Arranca en la capa gratuita.
 - **Cada aviso tiene su URL.** Con previsualización real (foto + nombre +
   ciudad) al pegarla en WhatsApp o Facebook, que es como circulan estos avisos.
 - **Los 1.122 municipios del DANE**, con filtro por ciudad.
@@ -43,7 +44,7 @@ Llenalas así:
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Project Settings → API → *Project URL* |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Project Settings → API → *service_role* ⚠️ secreta |
-| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys |
+| `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) → Create API key (gratis) |
 | `NEXT_PUBLIC_SITE_URL` | El dominio final. En local, `http://localhost:3000` |
 
 ### 4. Correr en local
@@ -54,7 +55,7 @@ pnpm dev
 ```
 
 Abrí <http://localhost:3000/api/diagnostico>: te dice, campo por campo, si la
-base, la búsqueda, el bucket y Claude están respondiendo.
+base, la búsqueda, el bucket y Gemini están respondiendo.
 
 ---
 
@@ -74,7 +75,7 @@ Una vez desplegado, verificá <https://TU-DOMINIO/api/diagnostico>.
 
 > **Por qué Vercel y no GitHub Pages:** GitHub Pages solo sirve archivos
 > estáticos, y esta app necesita servidor para tres cosas que son el corazón del
-> proyecto: llamar a Claude sin exponer la API key, generar la previsualización
+> proyecto: llamar a Gemini sin exponer la API key, generar la previsualización
 > de cada aviso para WhatsApp, y que Google indexe cada mascota. El plan
 > gratuito de Vercel cubre esto de sobra.
 
@@ -85,12 +86,12 @@ Una vez desplegado, verificá <https://TU-DOMINIO/api/diagnostico>.
 Es el punto donde se decide si una familia encuentra a su mascota, así que vale
 la pena entender las dos mitades:
 
-**Al publicar**, Claude mira las fotos y devuelve atributos de un vocabulario
+**Al publicar**, Gemini mira las fotos y devuelve atributos de un vocabulario
 cerrado (`src/lib/types.ts`): colores de una lista de 13, tamaño, sexo, pelaje,
 más señas particulares en texto libre y palabras clave. Todo eso se aplana en
 una columna `search_text` normalizada (minúscula, sin tildes).
 
-**Al buscar**, Claude convierte el texto libre en filtros usando *ese mismo*
+**Al buscar**, Gemini convierte el texto libre en filtros usando *ese mismo*
 vocabulario. Como los dos lados hablan el mismo idioma, filtrar es comparar
 strings y no adivinar sinónimos.
 
@@ -99,9 +100,26 @@ palabras clave suman puntos, y lo reciente pesa un poco más. Excluir sería peo
 —dos personas describen distinto al mismo animal—, así que preferimos mostrar de
 más y ordenar bien.
 
-**Si Claude falla o no hay API key, la app sigue en pie:** publicar guarda el
+**Si Gemini falla o no hay API key, la app sigue en pie:** publicar guarda el
 aviso sin atributos, y la búsqueda cae a un modo por palabras sueltas que
 reconoce colores y especie. Peor que la IA, muchísimo mejor que un error.
+
+### Costo y escala
+
+Se arranca en la **capa gratuita** de Gemini, que alcanza de sobra para las
+primeras semanas. Cuando el volumen crezca hay dos palancas, en este orden:
+
+1. **Bajar de modelo.** `GEMINI_MODEL=gemini-3.5-flash-lite` es el tramo más
+   económico para alto volumen. Es una variable de entorno, no un cambio de
+   código.
+2. **Cachear por foto.** Hoy cada publicación llama al modelo una vez; si
+   alguien republica la misma mascota se vuelve a pagar. Un hash de la imagen
+   como clave evitaría el segundo llamado.
+
+Cambiar de proveedor también es contenido: todo vive en `src/lib/ai.ts`, que
+exporta solo tres funciones (`aiEnabled`, `extractAttributes`,
+`parseSearchQuery`). El vocabulario cerrado de `types.ts` —donde está la
+inteligencia real del buscador— no depende de ningún proveedor.
 
 ---
 
@@ -115,7 +133,7 @@ reconoce colores y especie. Peor que la IA, muchísimo mejor que un error.
   token) sino por los teléfonos — publicar tu número para que te llamen por tu
   perro no es lo mismo que regalárselo a un scraper.
 - **Las fotos se encogen en el navegador** antes de subir (`src/lib/resize.ts`).
-  Mucha gente publica desde el celular con datos contados, y Claude cobra por
+  Mucha gente publica desde el celular con datos contados, y la IA cobra por
   píxel.
 - **Los municipios salen del DANE**, no de una lista escrita a mano. El archivo
   `src/lib/cities.ts` se genera; no lo edités a mano.
@@ -135,12 +153,12 @@ src/
       opengraph-image.tsx          Previsualización para WhatsApp
     gestionar/[token]/             Edición con el link secreto
     api/
-      publicar/                    Sube fotos, llama a Claude, inserta
+      publicar/                    Sube fotos, llama a Gemini, inserta
       buscar/                      Interpreta la búsqueda y consulta
       gestionar/[token]/           Editar, marcar reunido, eliminar
       diagnostico/                 Chequeo de salud
   lib/
-    anthropic.ts                   Los dos prompts y sus esquemas
+    ai.ts                          Los dos prompts y sus esquemas (Gemini)
     cities.ts                      1.122 municipios (generado)
     pets.ts                        Acceso a datos
     types.ts                       Vocabulario cerrado
@@ -154,5 +172,9 @@ supabase/migrations/0001_init.sql  Esquema completo
 - Aviso por WhatsApp o correo cuando aparezca un animal parecido en tu ciudad.
 - Mapa con el último punto donde se vio (las coordenadas de cada municipio ya
   están en `cities.ts`).
+- **Coincidencias automáticas con embeddings.** Google sí ofrece API de
+  embeddings: guardando un vector por aviso se podría comparar cada "perdido"
+  contra cada "encontrado" de la misma ciudad y avisar solo. Es el siguiente
+  salto real del producto.
 - Comparación foto contra foto entre perdidos y encontrados de la misma ciudad.
 - Moderación básica para avisos duplicados o mal intencionados.

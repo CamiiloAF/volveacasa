@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { extractAttributes, aiEnabled } from '@/lib/anthropic';
+import { extractAttributes, aiEnabled } from '@/lib/ai';
 import { cityByCode } from '@/lib/cities';
 import { adminClient } from '@/lib/supabase';
 import { buildSearchText, buildSlug, randomSuffix } from '@/lib/text';
@@ -21,15 +21,15 @@ const MIME: Record<string, 'image/jpeg' | 'image/png' | 'image/webp'> = {
 };
 
 const payloadSchema = z.object({
-  kind: z.enum(KINDS),
-  species: z.enum(SPECIES),
+  kind: z.enum(KINDS, { error: 'Indicá si se perdió o si lo encontraste.' }),
+  species: z.enum(SPECIES, { error: 'Indicá qué animal es.' }),
   name: z.string().trim().max(60).optional().nullable(),
   description: z.string().trim().min(10, 'Contanos un poco más').max(2000),
   cityCode: z.string().trim().min(1, 'Escogé la ciudad'),
   neighborhood: z.string().trim().max(120).optional().nullable(),
   eventDate: z
     .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Revisá la fecha.')
     .optional()
     .nullable(),
   contactName: z.string().trim().min(2, 'Necesitamos tu nombre').max(80),
@@ -37,10 +37,50 @@ const payloadSchema = z.object({
   contactWhatsapp: z.boolean().default(true),
   reward: z.string().trim().max(120).optional().nullable(),
   // Lo que la persona corrigió a mano después de ver lo que detectó la IA.
-  colors: z.array(z.enum(COLORS)).max(4).default([]),
-  size: z.enum(SIZES).optional().nullable(),
-  sex: z.enum(SEXES).default('desconocido'),
+  colors: z.array(z.enum(COLORS, { error: 'Ese color no está en la lista.' })).max(4).default([]),
+  size: z.enum(SIZES, { error: 'Ese tamaño no está en la lista.' }).optional().nullable(),
+  sex: z.enum(SEXES, { error: 'Ese sexo no está en la lista.' }).default('desconocido'),
 });
+
+/** Nombres de campo en español, para no mostrarle "kind" a quien publica. */
+const FIELD_LABEL: Record<string, string> = {
+  kind: 'si se perdió o lo encontraste',
+  species: 'qué animal es',
+  description: 'la descripción',
+  cityCode: 'el municipio',
+  contactName: 'tu nombre',
+  contactPhone: 'el teléfono',
+  colors: 'los colores',
+  size: 'el tamaño',
+  sex: 'el sexo',
+  eventDate: 'la fecha',
+};
+
+/** Cómo empiezan los mensajes que genera zod cuando no le dimos uno propio. */
+const ZOD_DEFAULT_PREFIXES = [
+  'Invalid',
+  'Expected',
+  'Too small',
+  'Too big',
+  'Unrecognized',
+  'Required',
+  'Not a',
+];
+
+/**
+ * Cada campo del esquema lleva su propio mensaje en español, así que casi
+ * siempre alcanza con mostrarlo. La lista de arriba es la red de seguridad para
+ * un campo al que se nos olvide ponerle mensaje: nunca le enseñamos a quien
+ * publica un texto del validador en inglés.
+ */
+function friendlyError(issue: z.core.$ZodIssue | undefined): string {
+  if (!issue) return 'Faltan datos por llenar.';
+  const isZodDefault = ZOD_DEFAULT_PREFIXES.some((prefix) => issue.message.startsWith(prefix));
+  if (!isZodDefault) return issue.message;
+
+  const field = FIELD_LABEL[String(issue.path[0] ?? '')];
+  return field ? `Revisá ${field}.` : 'Revisá los datos del formulario.';
+}
 
 function emptyAttributes(): PetAttributes {
   return {
@@ -68,10 +108,7 @@ export async function POST(request: Request) {
 
   const parsed = payloadSchema.safeParse(JSON.parse(String(form.get('datos') ?? '{}')));
   if (!parsed.success) {
-    return NextResponse.json(
-      { error: parsed.error.issues[0]?.message ?? 'Faltan datos.' },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: friendlyError(parsed.error.issues[0]) }, { status: 400 });
   }
   const data = parsed.data;
 

@@ -1,6 +1,6 @@
 import 'server-only';
 
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
 import { z } from 'zod';
 
 import {
@@ -19,29 +19,38 @@ import {
   type Species,
 } from './types';
 
-const MODEL = 'claude-opus-5';
+/**
+ * Gemini Flash: tiene capa gratuita para arrancar y es el tramo más barato
+ * cuando toque pagar. Para "mirá esta foto y decime de qué color es el perro"
+ * no hace falta un modelo de frontera, y esta app tiene que poder sostenerse
+ * sin ingresos.
+ *
+ * El modelo es configurable por si sale uno mejor o más barato: no hay que
+ * tocar código para cambiarlo.
+ */
+const MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.6-flash';
 
-let cached: Anthropic | null = null;
+let cached: GoogleGenAI | null = null;
 
-function client(): Anthropic {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('Falta ANTHROPIC_API_KEY. Copiá .env.example a .env.local.');
+function client(): GoogleGenAI {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('Falta GEMINI_API_KEY. Copiá .env.example a .env.local.');
   }
-  cached ??= new Anthropic();
+  cached ??= new GoogleGenAI({});
   return cached;
 }
 
 export function aiEnabled(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY);
+  return Boolean(process.env.GEMINI_API_KEY);
 }
 
 // ---------------------------------------------------------------------------
 // Esquemas de salida
 //
 // Nada es nullable a propósito: en vez de `null` usamos un valor explícito
-// ('no_se', 'cualquiera', ''). Los structured outputs no aceptan esquemas
-// recursivos ni restricciones de longitud, y un enum cerrado le da al modelo
-// una salida obvia cuando la foto no alcanza para saberlo.
+// ('no_se', 'cualquiera', ''). Gemini acepta un subconjunto de OpenAPI 3.0, así
+// que nos quedamos en lo básico —type, properties, required, enum, items— y un
+// enum cerrado le da al modelo una salida obvia cuando la foto no alcanza.
 // ---------------------------------------------------------------------------
 
 const UNKNOWN = 'no_se';
@@ -75,8 +84,7 @@ const attributesSchema = {
     'summary',
     'keywords',
   ],
-  additionalProperties: false,
-} as const;
+};
 
 const attributesParser = z.object({
   species: z.string(),
@@ -104,8 +112,7 @@ const intentSchema = {
     keywords: { type: 'array', items: { type: 'string' } },
   },
   required: ['kind', 'species', 'colors', 'size', 'sex', 'city_query', 'keywords'],
-  additionalProperties: false,
-} as const;
+};
 
 const intentParser = z.object({
   kind: z.string(),
@@ -120,13 +127,6 @@ const intentParser = z.object({
 // ---------------------------------------------------------------------------
 // Utilidades
 // ---------------------------------------------------------------------------
-
-function firstTextBlock(content: Anthropic.ContentBlock[]): string {
-  for (const block of content) {
-    if (block.type === 'text') return block.text;
-  }
-  return '';
-}
 
 function pickEnum<T extends string>(value: string, allowed: readonly T[]): T | null {
   return (allowed as readonly string[]).includes(value) ? (value as T) : null;
@@ -145,6 +145,22 @@ function cleanKeywords(values: string[]): string[] {
     if (seen.size >= 14) break;
   }
   return [...seen];
+}
+
+/**
+ * `response_format` obliga a JSON válido, pero un modelo puede devolver texto
+ * vacío si algo se atraviesa. Fallamos con un mensaje claro en vez de dejar que
+ * reviente un `JSON.parse` a mitad de camino.
+ */
+function parseJson(output: string | undefined, context: string): unknown {
+  if (!output?.trim()) {
+    throw new Error(`Gemini devolvió una respuesta vacía al ${context}.`);
+  }
+  try {
+    return JSON.parse(output);
+  } catch {
+    throw new Error(`Gemini devolvió algo que no es JSON al ${context}.`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -170,39 +186,38 @@ export async function extractAttributes(input: {
   description: string;
   species?: Species | null;
 }): Promise<PetAttributes> {
-  const content: Anthropic.ContentBlockParam[] = input.images.slice(0, 4).map((image) => ({
-    type: 'image',
-    source: { type: 'base64', media_type: image.mediaType, data: image.data },
-  }));
-
   const hints: string[] = [];
   if (input.species) hints.push(`Quien publica dice que es un ${input.species}.`);
   if (input.description.trim()) {
     hints.push(`Lo que escribió quien publica:\n"""\n${input.description.trim()}\n"""`);
   }
 
-  content.push({
-    type: 'text',
-    text:
-      (hints.length
-        ? `${hints.join('\n\n')}\n\n`
-        : 'No hay descripción escrita; guiate solo por las fotos.\n\n') +
-      'Describí los rasgos físicos del animal de las fotos. Si la descripción escrita menciona algo que no se ve en la foto (por ejemplo una cicatriz tapada), podés incluirlo igual: quien publica conoce al animal.',
-  });
+  const prompt =
+    (hints.length
+      ? `${hints.join('\n\n')}\n\n`
+      : 'No hay descripción escrita; guiate solo por las fotos.\n\n') +
+    'Describí los rasgos físicos del animal de las fotos. Si la descripción escrita menciona algo que no se ve en la foto (por ejemplo una cicatriz tapada), podés incluirlo igual: quien publica conoce al animal.';
 
-  const response = await client().messages.create({
+  const interaction = await client().interactions.create({
     model: MODEL,
-    max_tokens: 2000,
-    system: EXTRACT_SYSTEM,
-    output_config: { format: { type: 'json_schema', schema: attributesSchema } },
-    messages: [{ role: 'user', content }],
+    system_instruction: EXTRACT_SYSTEM,
+    input: [
+      ...input.images.slice(0, 4).map((image) => ({
+        type: 'image' as const,
+        data: image.data,
+        mime_type: image.mediaType,
+      })),
+      { type: 'text' as const, text: prompt },
+    ],
+    response_format: {
+      type: 'text',
+      mime_type: 'application/json',
+      schema: attributesSchema,
+    },
+    generation_config: { max_output_tokens: 2000 },
   });
 
-  if (response.stop_reason === 'refusal') {
-    throw new Error('El modelo no pudo analizar estas fotos.');
-  }
-
-  const raw = attributesParser.parse(JSON.parse(firstTextBlock(response.content)));
+  const raw = attributesParser.parse(parseJson(interaction.output_text, 'analizar las fotos'));
 
   return {
     species: pickEnum<Species>(raw.species, SPECIES),
@@ -238,19 +253,19 @@ Reglas:
 Escribí siempre en español.`;
 
 export async function parseSearchQuery(query: string): Promise<SearchIntent> {
-  const response = await client().messages.create({
+  const interaction = await client().interactions.create({
     model: MODEL,
-    max_tokens: 1000,
-    system: SEARCH_SYSTEM,
-    output_config: { format: { type: 'json_schema', schema: intentSchema } },
-    messages: [{ role: 'user', content: `Búsqueda: """${query.trim()}"""` }],
+    system_instruction: SEARCH_SYSTEM,
+    input: `Búsqueda: """${query.trim()}"""`,
+    response_format: {
+      type: 'text',
+      mime_type: 'application/json',
+      schema: intentSchema,
+    },
+    generation_config: { max_output_tokens: 1000 },
   });
 
-  if (response.stop_reason === 'refusal') {
-    throw new Error('No se pudo interpretar la búsqueda.');
-  }
-
-  const raw = intentParser.parse(JSON.parse(firstTextBlock(response.content)));
+  const raw = intentParser.parse(parseJson(interaction.output_text, 'interpretar la búsqueda'));
 
   return {
     kind: pickEnum<Kind>(raw.kind, KINDS),

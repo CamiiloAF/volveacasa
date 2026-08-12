@@ -24,9 +24,26 @@ async function findByToken(token: string) {
   return data as (Pet & { manage_token_hash: string; search_text: string }) | null;
 }
 
+/**
+ * "No existe" y "no pude preguntar" son cosas distintas y hay que separarlas.
+ * Si la base falla y respondemos 404, a la persona le decimos que su aviso
+ * desapareció — el peor mensaje posible para quien está buscando a su mascota.
+ */
+const DB_DOWN = {
+  error: 'No pudimos consultar tu aviso en este momento. Volvé a intentar en un minuto.',
+} as const;
+
 export async function GET(_request: Request, context: { params: Promise<{ token: string }> }) {
   const { token } = await context.params;
-  const pet = await findByToken(token);
+
+  let pet: Awaited<ReturnType<typeof findByToken>>;
+  try {
+    pet = await findByToken(token);
+  } catch (error) {
+    console.error('findByToken falló:', error);
+    return NextResponse.json(DB_DOWN, { status: 503 });
+  }
+
   if (!pet) {
     return NextResponse.json({ error: 'Ese código de gestión no existe.' }, { status: 404 });
   }
@@ -62,7 +79,14 @@ export async function POST(request: Request, context: { params: Promise<{ token:
   }
   const body = parsed.data;
 
-  const pet = await findByToken(token);
+  let pet: Awaited<ReturnType<typeof findByToken>>;
+  try {
+    pet = await findByToken(token);
+  } catch (error) {
+    console.error('findByToken falló:', error);
+    return NextResponse.json(DB_DOWN, { status: 503 });
+  }
+
   if (!pet) {
     return NextResponse.json({ error: 'Ese código de gestión no existe.' }, { status: 404 });
   }

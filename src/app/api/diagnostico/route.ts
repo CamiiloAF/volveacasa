@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { aiEnabled, parseSearchQuery } from '@/lib/anthropic';
+import { aiEnabled, parseSearchQuery } from '@/lib/ai';
 import { adminClient } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
@@ -58,9 +58,9 @@ export async function GET() {
   // --- Claude -------------------------------------------------------------
   if (!aiEnabled()) {
     checks.push({
-      nombre: 'Claude',
+      nombre: 'Gemini',
       ok: false,
-      detalle: 'Sin ANTHROPIC_API_KEY. La app funciona, pero sin IA en publicar ni buscar.',
+      detalle: 'Sin GEMINI_API_KEY. La app funciona, pero sin IA en publicar ni buscar.',
     });
   } else {
     try {
@@ -70,7 +70,7 @@ export async function GET() {
         intent.colors.includes('negro') &&
         Boolean(intent.city_query);
       checks.push({
-        nombre: 'Claude',
+        nombre: 'Gemini',
         ok: acierta,
         detalle: acierta
           ? 'Interpretó bien la búsqueda de prueba.'
@@ -78,7 +78,7 @@ export async function GET() {
       });
     } catch (error) {
       checks.push({
-        nombre: 'Claude',
+        nombre: 'Gemini',
         ok: false,
         detalle: error instanceof Error ? error.message : 'Error desconocido.',
       });

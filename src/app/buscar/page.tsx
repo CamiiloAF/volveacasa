@@ -3,7 +3,7 @@ import { Suspense } from 'react';
 
 import { PetGrid } from '@/components/PetCard';
 import { SearchExperience } from '@/components/SearchExperience';
-import { aiEnabled, parseSearchQuery } from '@/lib/anthropic';
+import { aiEnabled, parseSearchQuery } from '@/lib/ai';
 import { browsePets, resolveCityQuery, searchPets } from '@/lib/pets';
 import type { PetCard as PetCardType } from '@/lib/types';
 

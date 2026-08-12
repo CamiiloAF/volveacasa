@@ -8,7 +8,10 @@ import { COLORS, COLOR_LABEL, SIZES, SIZE_LABEL, type Color, type Pet, type Size
 
 type State =
   | { phase: 'loading' }
+  /** El código no corresponde a ningún aviso. */
   | { phase: 'missing' }
+  /** No pudimos preguntar. Distinto de 'missing': el aviso probablemente sigue ahí. */
+  | { phase: 'unavailable' }
   | { phase: 'ready'; pet: Pet }
   | { phase: 'deleted' };
 
@@ -32,9 +35,18 @@ export function ManagePanel({ token }: { token: string }) {
 
   useEffect(() => {
     void (async () => {
-      const response = await fetch(`/api/gestionar/${token}`);
+      let response: globalThis.Response;
+      try {
+        response = await fetch(`/api/gestionar/${token}`);
+      } catch {
+        setState({ phase: 'unavailable' });
+        return;
+      }
       if (!response.ok) {
-        setState({ phase: 'missing' });
+        // Solo un 404 significa de verdad "este código no existe". Cualquier
+        // otra cosa es un problema nuestro, y decirle a alguien que su aviso
+        // desapareció cuando no es cierto es el peor error que podemos cometer.
+        setState({ phase: response.status === 404 ? 'missing' : 'unavailable' });
         return;
       }
       const { pet } = (await response.json()) as { pet: Pet };
@@ -79,6 +91,28 @@ export function ManagePanel({ token }: { token: string }) {
 
   if (state.phase === 'loading') {
     return <div className="card h-64 animate-pulse" />;
+  }
+
+  if (state.phase === 'unavailable') {
+    return (
+      <div className="card p-8 text-center flex flex-col items-center gap-3">
+        <span className="text-4xl" aria-hidden>
+          ⏳
+        </span>
+        <h2 className="font-bold text-xl">No pudimos cargar tu aviso ahora</h2>
+        <p className="text-ink-soft max-w-md">
+          Es un problema nuestro, no tuyo: <strong>tu aviso sigue publicado</strong> y tu link
+          sigue sirviendo. Recargá la página en un minuto.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-2 px-5 py-2.5 rounded-xl bg-primary text-primary-ink font-bold"
+        >
+          Reintentar
+        </button>
+      </div>
+    );
   }
 
   if (state.phase === 'missing') {

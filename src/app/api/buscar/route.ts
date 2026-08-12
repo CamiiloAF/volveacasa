@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { aiEnabled, parseSearchQuery } from '@/lib/anthropic';
+import { aiEnabled, parseSearchQuery } from '@/lib/ai';
 import { resolveCityQuery, searchPets } from '@/lib/pets';
 import { normalize } from '@/lib/text';
 import { COLORS, type Color, type SearchIntent } from '@/lib/types';
