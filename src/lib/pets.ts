@@ -69,13 +69,25 @@ export function resolveCityQuery(cityQuery: string | null): {
   return { cityCode: null, department: null };
 }
 
-/** Búsqueda con los filtros que la IA sacó del texto libre. */
+/**
+ * Búsqueda. El `intent` puede venir de la IA (texto libre) o armado a mano
+ * desde los filtros; para la consulta da igual, y por eso los filtros solos no
+ * gastan ni una petición de IA.
+ */
 export async function searchPets(
   intent: SearchIntent,
-  options: { status?: 'activo' | 'reunido'; limit?: number; offset?: number } = {},
+  options: {
+    status?: 'activo' | 'reunido';
+    limit?: number;
+    offset?: number;
+    /** Municipio escogido a mano. Manda sobre el que se adivine del texto. */
+    cityCode?: string | null;
+  } = {},
 ): Promise<PetCard[]> {
   const supabase = adminClient();
-  const { cityCode, department } = resolveCityQuery(intent.city_query);
+  const adivinada = resolveCityQuery(intent.city_query);
+  const cityCode = options.cityCode ?? adivinada.cityCode;
+  const department = options.cityCode ? null : adivinada.department;
 
   const { data, error } = await supabase.rpc('search_pets', {
     p_kind: intent.kind,

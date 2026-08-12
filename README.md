@@ -100,9 +100,32 @@ cerrado (`src/lib/types.ts`): colores de una lista de 13, tamaño, sexo, pelaje,
 más señas particulares en texto libre y palabras clave. Todo eso se aplana en
 una columna `search_text` normalizada (minúscula, sin tildes).
 
-**Al buscar**, Gemini convierte el texto libre en filtros usando *ese mismo*
-vocabulario. Como los dos lados hablan el mismo idioma, filtrar es comparar
-strings y no adivinar sinónimos.
+**Al buscar** hay dos caminos que terminan en la misma consulta:
+
+- **Los filtros** (ciudad, especie, color, tamaño, sexo, raza) no usan IA. Son
+  una consulta a Postgres y ya: no gastan cupo y siguen funcionando aunque la
+  cuota se agote. Es lo que casi todo el mundo va a usar — tocar "gato" y su
+  ciudad es más rápido que redactar, sobre todo desde el celular y con afán.
+- **El texto libre** sí usa IA, y solo si se escribe. Está para las señas
+  particulares, que es lo que ningún selector captura: "con una mancha blanca en
+  la oreja izquierda". Gemini lo convierte a filtros usando *ese mismo*
+  vocabulario cerrado, así que filtrar es comparar strings y no adivinar
+  sinónimos.
+
+Si se usan los dos a la vez, lo escogido a mano manda: si tocó el chip "Gato",
+el texto libre no puede cambiarlo a perro.
+
+**Qué excluye y qué solo ordena** — la distinción importa:
+
+| | |
+|---|---|
+| Excluyen | especie, ciudad, perdido/encontrado, y el color o la raza **escogidos a mano** |
+| Solo ordenan | tamaño, sexo, y todo lo que dedujo la IA del texto libre |
+
+El criterio es de quién viene el dato. Cuando alguien marca el chip "Blanco"
+está afirmando algo, y devolverle un perro café hace que deje de confiar en el
+buscador. Cuando el dato lo dedujo la IA de una frase, o es subjetivo como el
+tamaño, excluir esconde justo al animal que se busca.
 
 La función `search_pets` en Postgres puntúa en vez de excluir: los colores y las
 palabras clave suman puntos, y lo reciente pesa un poco más. Excluir sería peor
