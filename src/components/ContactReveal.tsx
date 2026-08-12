@@ -2,7 +2,13 @@
 
 import { useState } from 'react';
 
-type Contact = { name: string; phone: string; whatsapp: boolean; waNumber: string | null };
+type Contact = {
+  name: string;
+  phone: string;
+  whatsapp: boolean;
+  waNumber: string | null;
+  phoneAlt: string | null;
+};
 
 /**
  * El teléfono no viaja en el HTML del aviso: se pide al tocar el botón.
@@ -81,6 +87,15 @@ export function ContactReveal({ slug, contactName }: { slug: string; contactName
         >
           Llamar
         </a>
+
+        {contact.phoneAlt && (
+          <a
+            href={`tel:${contact.phoneAlt.replace(/\s/g, '')}`}
+            className="flex-1 text-center px-5 py-3 rounded-xl border border-border bg-surface font-bold hover:border-primary transition-colors"
+          >
+            Llamar al segundo número
+          </a>
+        )}
       </div>
 
       {/*

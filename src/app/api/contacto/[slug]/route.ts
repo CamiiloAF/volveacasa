@@ -51,7 +51,7 @@ export async function POST(_request: Request, context: { params: Promise<{ slug:
 
     const { data, error } = await supabase
       .from('pets')
-      .select('contact_name, contact_phone, contact_whatsapp, status')
+      .select('contact_name, contact_phone, contact_phone_alt, contact_whatsapp, status')
       .eq('slug', slug)
       .maybeSingle();
 
@@ -65,6 +65,7 @@ export async function POST(_request: Request, context: { params: Promise<{ slug:
       phone: data.contact_phone,
       whatsapp: data.contact_whatsapp,
       waNumber: data.contact_whatsapp ? whatsappNumber(data.contact_phone) : null,
+      phoneAlt: data.contact_phone_alt ?? null,
     });
   } catch (error) {
     console.error('contacto falló:', error);

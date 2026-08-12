@@ -1,10 +1,11 @@
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { extractAttributes, aiEnabled } from '@/lib/ai';
 import { cityByCode } from '@/lib/cities';
 import { adminClient } from '@/lib/supabase';
 import { buildSearchText, buildSlug, randomSuffix } from '@/lib/text';
+import { findAndStoreMatches } from '@/lib/matching';
 import { generateManageToken, hashManageToken } from '@/lib/token';
 import { COLORS, KINDS, SEXES, SIZES, SPECIES, type PetAttributes } from '@/lib/types';
 
@@ -35,6 +36,7 @@ const payloadSchema = z.object({
   contactName: z.string().trim().min(2, 'Necesitamos tu nombre').max(80),
   contactPhone: z.string().trim().min(7, 'Revisá el teléfono').max(30),
   contactWhatsapp: z.boolean().default(true),
+  contactPhoneAlt: z.string().trim().max(30).optional().nullable(),
   reward: z.string().trim().max(120).optional().nullable(),
   // Lo que la persona corrigió a mano después de ver lo que detectó la IA.
   colors: z.array(z.enum(COLORS, { error: 'Ese color no está en la lista.' })).max(4).default([]),
@@ -210,6 +212,7 @@ export async function POST(request: Request) {
     contact_name: data.contactName,
     contact_phone: data.contactPhone,
     contact_whatsapp: data.contactWhatsapp,
+    contact_phone_alt: data.contactPhoneAlt?.trim() || null,
     reward: data.reward?.trim() || null,
     photos: paths,
     search_text: buildSearchText({
@@ -233,13 +236,32 @@ export async function POST(request: Request) {
   const manageToken = generateManageToken();
   row.manage_token_hash = hashManageToken(manageToken);
 
-  const { error } = await supabase.from('pets').insert(row);
+  const { data: inserted, error } = await supabase
+    .from('pets')
+    .insert(row)
+    .select('id')
+    .single();
   if (error) {
     await supabase.storage.from('fotos').remove(paths);
     return NextResponse.json(
       { error: `No se pudo publicar: ${error.message}` },
       { status: 500 },
     );
+  }
+
+  // Buscar coincidencias es otra llamada a la IA. Con after() corre cuando la
+  // respuesta ya salió, así que quien publica no espera por ella.
+  if (inserted?.id) {
+    after(async () => {
+      try {
+        const encontradas = await findAndStoreMatches(inserted.id);
+        if (encontradas > 0) {
+          console.log(`[cruce] ${encontradas} coincidencia(s) para ${slug}`);
+        }
+      } catch (cruceError) {
+        console.error('cruce falló:', cruceError);
+      }
+    });
   }
 
   return NextResponse.json({

@@ -5,7 +5,9 @@ import { notFound } from 'next/navigation';
 
 import { ContactReveal } from '@/components/ContactReveal';
 import { ShareButtons } from '@/components/ShareButtons';
+import { MatchList } from '@/components/MatchList';
 import { KindBadge, PetGrid } from '@/components/PetCard';
+import { getMatches } from '@/lib/matching';
 import { getPetBySlug, similarPets } from '@/lib/pets';
 import { photoUrl } from '@/lib/supabase';
 import { longDate, relativeDate } from '@/lib/text';
@@ -67,7 +69,10 @@ export default async function PetPage({ params }: { params: Promise<{ slug: stri
   const pet = await getPetBySlug(slug).catch(() => null);
   if (!pet) notFound();
 
-  const similar = await similarPets(pet).catch(() => []);
+  const [similar, matches] = await Promise.all([
+    similarPets(pet).catch(() => []),
+    getMatches(pet.id).catch(() => []),
+  ]);
   const lost = pet.kind === 'perdido';
   const reunited = pet.status === 'reunido';
 
@@ -100,6 +105,8 @@ export default async function PetPage({ params }: { params: Promise<{ slug: stri
           🎉 Este animalito ya volvió con su familia
         </p>
       )}
+
+      {matches.length > 0 && <MatchList matches={matches} ownKind={pet.kind} />}
 
       <div className="grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] gap-8">
         {/* Fotos */}

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { aiEnabled, extractAttributes } from '@/lib/ai';
+import { getMatches } from '@/lib/matching';
 import { cityByCode } from '@/lib/cities';
 import { adminClient } from '@/lib/supabase';
 import { buildSearchText } from '@/lib/text';
@@ -49,7 +50,10 @@ export async function GET(_request: Request, context: { params: Promise<{ token:
     return NextResponse.json({ error: 'Ese código de gestión no existe.' }, { status: 404 });
   }
   const { manage_token_hash: _h, search_text: _s, ...rest } = pet;
-  return NextResponse.json({ pet: rest });
+  // Las coincidencias van acá y no en un endpoint aparte: quien abre su link
+  // de gestión es exactamente a quien hay que avisarle.
+  const matches = await getMatches(pet.id).catch(() => []);
+  return NextResponse.json({ pet: rest, matches });
 }
 
 const updateSchema = z.object({
@@ -62,6 +66,7 @@ const updateSchema = z.object({
   contactName: z.string().trim().min(2).max(80).optional(),
   contactPhone: z.string().trim().min(7).max(30).optional(),
   contactWhatsapp: z.boolean().optional(),
+  contactPhoneAlt: z.string().trim().max(30).nullable().optional(),
   reward: z.string().trim().max(120).nullable().optional(),
   colors: z.array(z.enum(COLORS)).max(4).optional(),
   size: z.enum(SIZES).nullable().optional(),
@@ -224,6 +229,10 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     contact_name: body.contactName ?? pet.contact_name,
     contact_phone: body.contactPhone ?? pet.contact_phone,
     contact_whatsapp: body.contactWhatsapp ?? pet.contact_whatsapp,
+    contact_phone_alt:
+      body.contactPhoneAlt !== undefined
+        ? body.contactPhoneAlt?.trim() || null
+        : pet.contact_phone_alt,
     reward: body.reward !== undefined ? body.reward?.trim() || null : pet.reward,
   };
 

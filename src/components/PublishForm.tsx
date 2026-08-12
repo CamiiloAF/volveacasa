@@ -46,6 +46,7 @@ export function PublishForm() {
   const [contactName, setContactName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [contactWhatsapp, setContactWhatsapp] = useState(true);
+  const [contactPhoneAlt, setContactPhoneAlt] = useState('');
   const [reward, setReward] = useState('');
 
   const [sending, setSending] = useState(false);
@@ -89,6 +90,7 @@ export function PublishForm() {
           contactName,
           contactPhone,
           contactWhatsapp,
+          contactPhoneAlt: contactPhoneAlt || null,
           reward: lost ? reward || null : null,
           colors,
           size: size || null,
@@ -423,6 +425,24 @@ export function PublishForm() {
           />
           <span>Este número tiene WhatsApp (así es más fácil que te escriban)</span>
         </label>
+
+        <div>
+          <label className="field-label" htmlFor="telefono2">
+            Otro teléfono <span className="font-normal">(opcional)</span>
+          </label>
+          <input
+            id="telefono2"
+            type="tel"
+            className="field"
+            maxLength={30}
+            value={contactPhoneAlt}
+            onChange={(e) => setContactPhoneAlt(e.target.value)}
+            placeholder="El de un familiar, por si no contestás"
+          />
+          <p className="text-xs text-ink-soft mt-1.5">
+            Sirve mucho: quien encuentra a un animalito suele llamar una sola vez.
+          </p>
+        </div>
 
         {lost && (
           <div>

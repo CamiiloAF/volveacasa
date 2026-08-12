@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
 import { CityPicker } from '@/components/CityPicker';
+import { MatchList } from '@/components/MatchList';
+import type { PetMatch } from '@/lib/match-shared';
 import { COLORS, COLOR_LABEL, SIZES, SIZE_LABEL, type Color, type Pet, type Size } from '@/lib/types';
 
 type State =
@@ -12,7 +14,7 @@ type State =
   | { phase: 'missing' }
   /** No pudimos preguntar. Distinto de 'missing': el aviso probablemente sigue ahí. */
   | { phase: 'unavailable' }
-  | { phase: 'ready'; pet: Pet }
+  | { phase: 'ready'; pet: Pet; matches: PetMatch[] }
   | { phase: 'deleted' };
 
 export function ManagePanel({ token }: { token: string }) {
@@ -29,6 +31,7 @@ export function ManagePanel({ token }: { token: string }) {
   const [contactName, setContactName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [contactWhatsapp, setContactWhatsapp] = useState(true);
+  const [contactPhoneAlt, setContactPhoneAlt] = useState('');
   const [reward, setReward] = useState('');
   const [colors, setColors] = useState<Color[]>([]);
   const [size, setSize] = useState<Size | ''>('');
@@ -49,8 +52,8 @@ export function ManagePanel({ token }: { token: string }) {
         setState({ phase: response.status === 404 ? 'missing' : 'unavailable' });
         return;
       }
-      const { pet } = (await response.json()) as { pet: Pet };
-      setState({ phase: 'ready', pet });
+      const { pet, matches } = (await response.json()) as { pet: Pet; matches?: PetMatch[] };
+      setState({ phase: 'ready', pet, matches: matches ?? [] });
       setDescription(pet.description);
       setName(pet.name ?? '');
       setCityCode(pet.city_code);
@@ -58,6 +61,7 @@ export function ManagePanel({ token }: { token: string }) {
       setContactName(pet.contact_name);
       setContactPhone(pet.contact_phone);
       setContactWhatsapp(pet.contact_whatsapp);
+      setContactPhoneAlt(pet.contact_phone_alt ?? '');
       setReward(pet.reward ?? '');
       setColors(pet.colors as Color[]);
       setSize(pet.size ?? '');
@@ -148,7 +152,7 @@ export function ManagePanel({ token }: { token: string }) {
     );
   }
 
-  const { pet } = state;
+  const { pet, matches } = state;
   const reunited = pet.status === 'reunido';
 
   return (
@@ -167,6 +171,8 @@ export function ManagePanel({ token }: { token: string }) {
           Ver el aviso
         </Link>
       </div>
+
+      {matches.length > 0 && <MatchList matches={matches} ownKind={pet.kind} />}
 
       {/* Estado */}
       <div
@@ -188,7 +194,7 @@ export function ManagePanel({ token }: { token: string }) {
               { action: reunited ? 'reabrir' : 'reunido' },
               reunited ? 'El aviso está activo otra vez.' : '¡Qué alegría! Quedó marcado.',
             );
-            if (result) setState({ phase: 'ready', pet: { ...pet, status: result.status } });
+            if (result) setState({ phase: 'ready', pet: { ...pet, status: result.status }, matches });
           }}
           className={`px-5 py-3 rounded-xl font-bold self-start ${
             reunited ? 'bg-surface border border-border' : 'bg-primary text-primary-ink'
@@ -241,6 +247,7 @@ export function ManagePanel({ token }: { token: string }) {
               setState({
                 phase: 'ready',
                 pet: { ...pet, ai_summary: result.summary, marks: result.marks ?? [] },
+                matches,
               });
             }
           }}
@@ -269,6 +276,7 @@ export function ManagePanel({ token }: { token: string }) {
               contactName,
               contactPhone,
               contactWhatsapp,
+              contactPhoneAlt: contactPhoneAlt || null,
               reward: reward || null,
               colors,
               size: size || null,
@@ -410,6 +418,21 @@ export function ManagePanel({ token }: { token: string }) {
           />
           <span>Este número tiene WhatsApp</span>
         </label>
+
+        <div>
+          <label className="field-label" htmlFor="m-tel2">
+            Otro teléfono <span className="font-normal">(opcional)</span>
+          </label>
+          <input
+            id="m-tel2"
+            type="tel"
+            className="field"
+            value={contactPhoneAlt}
+            maxLength={30}
+            onChange={(e) => setContactPhoneAlt(e.target.value)}
+            placeholder="El de un familiar, por si no contestás"
+          />
+        </div>
 
         {pet.kind === 'perdido' && (
           <div>

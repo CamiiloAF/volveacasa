@@ -36,6 +36,8 @@ migraciones en orden**:
    — hace que el tamaño y el sexo puntúen en vez de excluir.
 3. [`supabase/migrations/0003_proteger_telefonos.sql`](supabase/migrations/0003_proteger_telefonos.sql)
    — tope por IP para que no se puedan recolectar los teléfonos en masa.
+4. [`supabase/migrations/0004_coincidencias.sql`](supabase/migrations/0004_coincidencias.sql)
+   — segundo teléfono y cruce automático entre perdidos y encontrados.
 
 ### 3. Variables de entorno
 
@@ -209,6 +211,42 @@ src/
     types.ts                       Vocabulario cerrado
 supabase/migrations/0001_init.sql  Esquema completo
 ```
+
+---
+
+## El cruce entre perdidos y encontrados
+
+Es la función que convierte esto en algo que reúne mascotas, y no en un tablón
+de anuncios donde hay que buscar a mano.
+
+Cuando alguien publica, la app compara ese aviso contra los del tipo contrario
+que estén cerca y le avisa a los dos lados si cree que es el mismo animal.
+
+**Cómo funciona, en tres pasos:**
+
+1. **Prefiltro barato en SQL** (`match_candidates`): misma especie, tipo
+   contrario, activos, mismo municipio o al menos el mismo departamento —un
+   animal asustado cruza límites municipales sin enterarse—, ordenados por
+   colores en común. Máximo 6 candidatos.
+2. **Una sola llamada a la IA** que compara el aviso contra esos 6 y devuelve,
+   por cada uno, una probabilidad y una razón escrita para que la familia la
+   entienda.
+3. **Se guardan** en `pet_matches` los que pasan de 0.4, y se le muestran a la
+   gente los que pasan de 0.5.
+
+**Dos decisiones que importan:**
+
+- **Corre con `after()` de Next**, o sea después de responderle a quien publica.
+  Es una segunda llamada a la IA y publicar ya se siente lento; así no le suma
+  ni un segundo.
+- **Nunca se muestra un porcentaje.** "87% de coincidencia" suena a certeza y
+  acá no la hay: se dice "Se parece mucho", "Se parece bastante" o "Podría ser",
+  con la razón concreta al lado. Quien decide es la familia mirando la foto.
+
+El prompt está calibrado para eso mismo: ser demasiado optimista le da falsas
+esperanzas a alguien que está sufriendo, y ser demasiado estricto pierde un
+reencuentro. Está escrito en `src/lib/ai.ts` y vale la pena leerlo antes de
+tocarlo.
 
 ---
 

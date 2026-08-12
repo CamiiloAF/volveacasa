@@ -119,6 +119,7 @@ export type Pet = {
   contact_name: string;
   contact_phone: string;
   contact_whatsapp: boolean;
+  contact_phone_alt: string | null;
   reward: string | null;
   photos: string[];
   reunited_at: string | null;
@@ -131,6 +132,7 @@ export type PetCard = Omit<
   Pet,
   | 'contact_name'
   | 'contact_phone'
+  | 'contact_phone_alt'
   | 'contact_whatsapp'
   | 'collar_description'
   | 'ai_keywords'
