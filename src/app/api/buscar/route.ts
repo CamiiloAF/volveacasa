@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { aiEnabled, parseSearchQuery } from '@/lib/ai';
 import { resolveCityQuery, searchPets } from '@/lib/pets';
+import { getCachedIntent, putCachedIntent } from '@/lib/search-cache';
 import { normalize } from '@/lib/text';
 import { COLORS, type Color, type SearchIntent } from '@/lib/types';
 
@@ -52,11 +53,21 @@ export async function POST(request: Request) {
 
   let intent: SearchIntent;
   let usedAi = false;
+  let fromCache = false;
 
-  if (aiEnabled()) {
+  // Alguien ya buscó esto: la interpretación no cambia con el tiempo, así que
+  // no gastamos otra petición ni hacemos esperar a la persona.
+  const cached = await getCachedIntent(q);
+
+  if (cached) {
+    intent = cached;
+    usedAi = true;
+    fromCache = true;
+  } else if (aiEnabled()) {
     try {
       intent = await parseSearchQuery(q);
       usedAi = true;
+      void putCachedIntent(q, intent);
     } catch (error) {
       console.error('parseSearchQuery falló:', error);
       intent = fallbackIntent(q);
@@ -80,6 +91,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       results: filtered,
       usedAi,
+      fromCache,
       intent: {
         ...intent,
         resolvedCityCode: cityCode ?? resolved.cityCode,

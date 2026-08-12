@@ -38,6 +38,8 @@ migraciones en orden**:
    — tope por IP para que no se puedan recolectar los teléfonos en masa.
 4. [`supabase/migrations/0004_coincidencias.sql`](supabase/migrations/0004_coincidencias.sql)
    — segundo teléfono y cruce automático entre perdidos y encontrados.
+5. [`supabase/migrations/0005_cache_de_busquedas.sql`](supabase/migrations/0005_cache_de_busquedas.sql)
+   — caché de búsquedas, para no gastar cupo en preguntar dos veces lo mismo.
 
 ### 3. Variables de entorno
 
@@ -133,9 +135,23 @@ entre modelos distintos. Por eso hay un tope de espera (`GEMINI_TIMEOUT_MS`, 40s
 por defecto): Vercel corta la función a los 60 y sin ese tope un pico de cola
 tumbaba la publicación entera.
 
-**Sobre los límites gratuitos:** Google dejó de publicarlos por modelo —
-dependen de la cuenta y la región. Los tuyos están en
-[aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit).
+**Los límites gratuitos reales** (vistos en el panel de una cuenta, agosto 2026;
+dependen de la cuenta y la región — mirá los tuyos en
+[aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit)):
+
+| Modelo | Por minuto | Por día |
+|---|---|---|
+| `gemini-3.1-flash-lite` y `3.5-flash-lite` | 15 | **500** |
+| `gemini-3.6-flash` | 5 | **20** |
+
+Esa diferencia —20 contra 500 al día— es la razón de fondo para estar en
+Flash-Lite: con Flash la app se queda sin IA a media mañana.
+
+**El límite que aprieta es el de 15 por minuto**, no el diario. Cuando un aviso
+se comparte en un grupo grande, mucha gente busca lo mismo al tiempo. Por eso
+las interpretaciones de búsqueda se cachean (`search_cache`): "gato negro"
+significa lo mismo hoy que mañana, así que se le pregunta a la IA una sola vez y
+las demás personas obtienen la respuesta al instante y sin gastar cupo.
 
 **Una sola llamada por publicación.** Describir la foto y cruzarla contra los
 avisos cercanos son dos preguntas sobre lo mismo, así que van juntas: se

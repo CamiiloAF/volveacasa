@@ -5,6 +5,7 @@ import { PetGrid } from '@/components/PetCard';
 import { SearchExperience } from '@/components/SearchExperience';
 import { aiEnabled, parseSearchQuery } from '@/lib/ai';
 import { browsePets, resolveCityQuery, searchPets } from '@/lib/pets';
+import { getCachedIntent, putCachedIntent } from '@/lib/search-cache';
 import type { PetCard as PetCardType } from '@/lib/types';
 
 export const metadata: Metadata = {
@@ -24,8 +25,14 @@ async function resolveInitial(query: string, cityCode: string | null) {
   if (query.trim().length < 2) return { results: null, intent: null };
 
   try {
-    const intent = aiEnabled()
-      ? await parseSearchQuery(query)
+    const cached = await getCachedIntent(query);
+    const intent = cached
+      ? cached
+      : aiEnabled()
+      ? await parseSearchQuery(query).then(async (parsed) => {
+          await putCachedIntent(query, parsed);
+          return parsed;
+        })
       : {
           kind: null,
           species: null,
