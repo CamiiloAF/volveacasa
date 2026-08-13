@@ -6,39 +6,15 @@ import { getMatches } from '@/lib/matching';
 import { cityByCode } from '@/lib/cities';
 import { adminClient } from '@/lib/supabase';
 import { buildSearchText } from '@/lib/text';
-import { hashManageToken } from '@/lib/token';
-import { COLORS, SEXES, SIZES, type Pet } from '@/lib/types';
+import { DB_DOWN, findByToken, type ManagedPet } from '@/lib/manage';
+import { COLORS, SEXES, SIZES } from '@/lib/types';
 
 export const runtime = 'nodejs';
-
-/**
- * Busca la publicación por el hash del código. El código en claro nunca sale
- * del navegador de quien publicó ni se guarda en la base.
- */
-async function findByToken(token: string) {
-  const supabase = adminClient();
-  const { data, error } = await supabase
-    .from('pets')
-    .select('*')
-    .eq('manage_token_hash', hashManageToken(token))
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  return data as (Pet & { manage_token_hash: string; search_text: string }) | null;
-}
-
-/**
- * "No existe" y "no pude preguntar" son cosas distintas y hay que separarlas.
- * Si la base falla y respondemos 404, a la persona le decimos que su aviso
- * desapareció — el peor mensaje posible para quien está buscando a su mascota.
- */
-const DB_DOWN = {
-  error: 'No pudimos consultar tu aviso en este momento. Volvé a intentar en un minuto.',
-} as const;
 
 export async function GET(_request: Request, context: { params: Promise<{ token: string }> }) {
   const { token } = await context.params;
 
-  let pet: Awaited<ReturnType<typeof findByToken>>;
+  let pet: ManagedPet | null;
   try {
     pet = await findByToken(token);
   } catch (error) {
@@ -85,7 +61,7 @@ export async function POST(request: Request, context: { params: Promise<{ token:
   }
   const body = parsed.data;
 
-  let pet: Awaited<ReturnType<typeof findByToken>>;
+  let pet: ManagedPet | null;
   try {
     pet = await findByToken(token);
   } catch (error) {

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 
 import { CityPicker } from '@/components/CityPicker';
 import { MatchList } from '@/components/MatchList';
+import { PhotoEditor } from '@/components/PhotoEditor';
 import type { PetMatch } from '@/lib/match-shared';
 import { COLORS, COLOR_LABEL, SIZES, SIZE_LABEL, type Color, type Pet, type Size } from '@/lib/types';
 
@@ -203,6 +204,12 @@ export function ManagePanel({ token }: { token: string }) {
           {reunited ? 'Volver a activarlo' : '🎉 Sí, ya está en casa'}
         </button>
       </div>
+
+      <PhotoEditor
+        token={token}
+        photos={pet.photos}
+        onChange={(photos) => setState({ phase: 'ready', pet: { ...pet, photos }, matches })}
+      />
 
       {/* Análisis de fotos */}
       <div className="card p-5 flex flex-col gap-3">
